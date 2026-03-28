@@ -1,0 +1,14 @@
+{
+  "name": "@aspect/wdk-v2-wallet-btc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc" },
+  "dependencies": {
+    "@aspect/wdk-v2-utils": "file:../wdk-v2-utils",
+    "@aspect/wdk-v2-core": "file:../wdk-v2-core"
+  },
+  "devDependencies": { "typescript": "^5.4.0" }
+}
