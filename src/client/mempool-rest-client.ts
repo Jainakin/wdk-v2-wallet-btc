@@ -15,6 +15,7 @@
 
 import type { IBtcClient } from './btc-client.js';
 import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo, BtcNetwork } from '../types.js';
+import { LRUCache } from '../cache.js';
 
 /** Default mempool.space base URLs per network */
 const BASE_URLS: Record<BtcNetwork, string> = {
@@ -25,6 +26,8 @@ const BASE_URLS: Record<BtcNetwork, string> = {
 
 export class MempoolRestClient implements IBtcClient {
   private readonly baseUrl: string;
+  /** LRU cache for raw transaction hex (avoids re-fetching same tx) */
+  private readonly txCache = new LRUCache<string, string>(100);
 
   constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
     this.baseUrl = customUrl
@@ -33,8 +36,8 @@ export class MempoolRestClient implements IBtcClient {
   }
 
   async connect(): Promise<void> { /* no-op for HTTP REST */ }
-  async close(): Promise<void> { /* no-op */ }
-  async reconnect(): Promise<void> { /* no-op */ }
+  async close(): Promise<void> { this.txCache.clear(); }
+  async reconnect(): Promise<void> { this.txCache.clear(); }
 
   async getBalance(address: string): Promise<BtcBalance> {
     const data = await this.fetchJson<{
@@ -163,7 +166,13 @@ export class MempoolRestClient implements IBtcClient {
   }
 
   async getTransaction(txHash: string): Promise<string> {
-    return this.fetchText(`/tx/${txHash}/hex`);
+    // Check LRU cache first
+    const cached = this.txCache.get(txHash);
+    if (cached !== undefined) return cached;
+
+    const hex = await this.fetchText(`/tx/${txHash}/hex`);
+    this.txCache.set(txHash, hex);
+    return hex;
   }
 
   async broadcast(rawTx: string): Promise<string> {

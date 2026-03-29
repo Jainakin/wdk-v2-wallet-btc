@@ -43,10 +43,20 @@ export function createClient(
   const net = desc.network ?? network;
 
   switch (desc.type) {
+    // Production-compatible descriptors
+    case 'blockbook-http':
     case 'blockbook':
       return new BlockbookClient(net, desc.url);
     case 'mempool-rest':
       return new MempoolRestClient(net, desc.url);
+    // Production Electrum descriptors — not yet implemented, but recognized
+    // so config doesn't silently break when switching from production
+    case 'electrum':
+    case 'electrum-ws':
+      throw new Error(
+        `BTC client type "${desc.type}" is recognized but not yet implemented in v2. ` +
+        `Use "blockbook-http" or "mempool-rest" instead.`
+      );
     default:
       throw new Error(`Unknown BTC client type: ${(desc as any).type}`);
   }

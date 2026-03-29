@@ -17,6 +17,7 @@
 
 import type { IBtcClient } from './btc-client.js';
 import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo, BtcNetwork } from '../types.js';
+import { LRUCache } from '../cache.js';
 
 /** Default Blockbook server URLs per network */
 const BASE_URLS: Record<BtcNetwork, string> = {
@@ -30,6 +31,7 @@ const MEMPOOL_FEE_URL = 'https://mempool.space/api/v1/fees/recommended';
 
 export class BlockbookClient implements IBtcClient {
   private readonly baseUrl: string;
+  private readonly txCache = new LRUCache<string, string>(100);
 
   constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
     this.baseUrl = customUrl
@@ -44,7 +46,7 @@ export class BlockbookClient implements IBtcClient {
   }
 
   async connect(): Promise<void> { /* no-op for HTTP REST */ }
-  async close(): Promise<void> { /* no-op */ }
+  async close(): Promise<void> { this.txCache.clear(); }
   async reconnect(): Promise<void> { /* no-op */ }
 
   async getBalance(address: string): Promise<BtcBalance> {
@@ -111,6 +113,9 @@ export class BlockbookClient implements IBtcClient {
   }
 
   async getTransaction(txHash: string): Promise<string> {
+    const cached = this.txCache.get(txHash);
+    if (cached !== undefined) return cached;
+
     const data = await this.fetchJson<{
       hex?: string;
     }>(`/api/v2/tx/${txHash}`);
@@ -119,6 +124,7 @@ export class BlockbookClient implements IBtcClient {
       throw new Error(`No hex data in Blockbook response for tx ${txHash}`);
     }
 
+    this.txCache.set(txHash, data.hex);
     return data.hex;
   }
 

@@ -350,9 +350,15 @@ export class BitcoinWallet extends BaseWallet {
   // -----------------------------------------------------------------------
 
   override destroy(): void {
+    // Close client and clear its caches (LRU tx cache, etc.)
     if (this.client) {
       this.client.close().catch(() => {});
     }
+    // Null out references to prevent accidental reuse
+    // Note: actual key material lives in the C key_store which
+    // zeroes bytes on releaseKey(). The JS layer only holds handles (integers).
+    this.network = 'bitcoin';
+    this.isTestnet = false;
     super.destroy();
   }
 }

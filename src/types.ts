@@ -86,9 +86,12 @@ export interface DetailedTxInfo {
   counterparties: string[];
 }
 
-/** Descriptor for creating a client via factory */
+/** Descriptor for creating a client via factory.
+ * Production-compatible types: 'blockbook-http', 'electrum', 'electrum-ws'
+ * v2 also accepts: 'blockbook' (alias), 'mempool-rest'
+ */
 export interface BtcClientDescriptor {
-  type: 'blockbook' | 'mempool-rest';
+  type: 'blockbook-http' | 'blockbook' | 'mempool-rest' | 'electrum' | 'electrum-ws';
   url?: string;
   network?: BtcNetwork;
 }
