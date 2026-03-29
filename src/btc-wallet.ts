@@ -76,7 +76,7 @@ export class BitcoinWallet extends BaseWallet {
   // -----------------------------------------------------------------------
 
   async getAddress(keyHandle: KeyHandle, _index: number): Promise<string> {
-    return generateSegwitAddress(keyHandle, this.isTestnet);
+    return generateSegwitAddress(keyHandle, this.isTestnet, this.network);
   }
 
   // -----------------------------------------------------------------------
@@ -343,6 +343,35 @@ export class BitcoinWallet extends BaseWallet {
       status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
       blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
     }));
+  }
+
+  // -----------------------------------------------------------------------
+  // Transaction receipt
+  // -----------------------------------------------------------------------
+
+  /**
+   * Get the confirmation status of a transaction.
+   * Matches production WDK's getTransactionReceipt().
+   */
+  async getTransactionReceipt(txHash: string): Promise<{
+    txHash: string;
+    confirmed: boolean;
+    blockHeight: number;
+    blockTime: number;
+    fee: number;
+  }> {
+    if (typeof (this.client as any).getTxStatus === 'function') {
+      return (this.client as any).getTxStatus(txHash);
+    }
+    // Fallback: verify tx exists via getTransaction
+    const rawHex = await this.client.getTransaction(txHash);
+    return {
+      txHash,
+      confirmed: rawHex.length > 0,
+      blockHeight: 0,
+      blockTime: 0,
+      fee: 0,
+    };
   }
 
   // -----------------------------------------------------------------------

@@ -175,6 +175,36 @@ export class MempoolRestClient implements IBtcClient {
     return hex;
   }
 
+  /**
+   * Get transaction confirmation status via mempool.space /tx/{txid} endpoint.
+   * Used by btc-wallet's getTransactionReceipt().
+   */
+  async getTxStatus(txHash: string): Promise<{
+    txHash: string;
+    confirmed: boolean;
+    blockHeight: number;
+    blockTime: number;
+    fee: number;
+  }> {
+    const data = await this.fetchJson<{
+      txid: string;
+      fee: number;
+      status: {
+        confirmed: boolean;
+        block_height?: number;
+        block_time?: number;
+      };
+    }>(`/tx/${txHash}`);
+
+    return {
+      txHash: data.txid,
+      confirmed: data.status.confirmed,
+      blockHeight: data.status.block_height ?? 0,
+      blockTime: data.status.block_time ?? 0,
+      fee: data.fee,
+    };
+  }
+
   async broadcast(rawTx: string): Promise<string> {
     const response = await native.net.fetch(`${this.baseUrl}/tx`, {
       method: 'POST',

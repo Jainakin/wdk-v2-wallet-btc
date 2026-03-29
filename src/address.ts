@@ -63,11 +63,13 @@ function convertBits(
  *
  * @param keyHandle  Key handle for the derived key
  * @param isTestnet  Use testnet prefix (tb1) instead of mainnet (bc1)
- * @returns bech32-encoded SegWit address (bc1q... or tb1q...)
+ * @param network    Network identifier — 'bitcoin', 'testnet', or 'regtest'
+ * @returns bech32-encoded SegWit address (bc1q... / tb1q... / bcrt1q...)
  */
 export function generateSegwitAddress(
   keyHandle: number,
   isTestnet: boolean = false,
+  network?: string,
 ): string {
   // 1. Compressed public key
   const pubkey = native.crypto.getPublicKey(keyHandle, 'secp256k1');
@@ -83,7 +85,8 @@ export function generateSegwitAddress(
   }
 
   // 5. Prepend witness version (0) and bech32-encode
-  const hrp = isTestnet ? 'tb' : 'bc';
+  // HRP: 'bc' for mainnet, 'tb' for testnet, 'bcrt' for regtest
+  const hrp = network === 'regtest' ? 'bcrt' : (isTestnet ? 'tb' : 'bc');
   const witnessData = new Uint8Array(1 + data5.length);
   witnessData[0] = 0; // witness version 0
   witnessData.set(data5, 1);
