@@ -14,7 +14,7 @@
  */
 
 import type { IBtcClient } from './btc-client.js';
-import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, BtcNetwork } from '../types.js';
+import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo, BtcNetwork } from '../types.js';
 
 /** Default mempool.space base URLs per network */
 const BASE_URLS: Record<BtcNetwork, string> = {
@@ -76,6 +76,90 @@ export class MempoolRestClient implements IBtcClient {
       tx_hash: tx.txid,
       height: tx.status.block_height ?? 0,
     }));
+  }
+
+  async getDetailedHistory(address: string, limit: number = 25): Promise<DetailedTxInfo[]> {
+    // Mempool /address/{addr}/txs returns full transaction objects
+    const txs = await this.fetchJson<Array<{
+      txid: string;
+      fee: number;
+      vin: Array<{ prevout: { scriptpubkey_address?: string; value: number } | null }>;
+      vout: Array<{ scriptpubkey_address?: string; value: number }>;
+      status: { confirmed: boolean; block_height?: number; block_time?: number };
+    }>>(`/address/${address}/txs`);
+
+    return txs.slice(0, limit).map((tx) => {
+      // Determine direction by checking if address appears in inputs/outputs
+      const inputAddresses = new Set(
+        tx.vin
+          .filter((v) => v.prevout?.scriptpubkey_address)
+          .map((v) => v.prevout!.scriptpubkey_address!)
+      );
+      const outputAddresses = new Set(
+        tx.vout
+          .filter((v) => v.scriptpubkey_address)
+          .map((v) => v.scriptpubkey_address!)
+      );
+
+      const isInInput = inputAddresses.has(address);
+      const isInOutput = outputAddresses.has(address);
+
+      let direction: 'sent' | 'received' | 'self';
+      if (isInInput && isInOutput) {
+        // Could be self-transfer or change output — check if ALL outputs go to us
+        const allOutputsToUs = tx.vout.every(
+          (v) => !v.scriptpubkey_address || v.scriptpubkey_address === address
+        );
+        direction = allOutputsToUs ? 'self' : 'sent';
+      } else if (isInInput) {
+        direction = 'sent';
+      } else {
+        direction = 'received';
+      }
+
+      // Calculate net amount for this address
+      let amount: number;
+      if (direction === 'received') {
+        amount = tx.vout
+          .filter((v) => v.scriptpubkey_address === address)
+          .reduce((sum, v) => sum + v.value, 0);
+      } else if (direction === 'sent') {
+        const totalIn = tx.vin
+          .filter((v) => v.prevout?.scriptpubkey_address === address)
+          .reduce((sum, v) => sum + (v.prevout?.value ?? 0), 0);
+        const changeBack = tx.vout
+          .filter((v) => v.scriptpubkey_address === address)
+          .reduce((sum, v) => sum + v.value, 0);
+        amount = -(totalIn - changeBack);
+      } else {
+        amount = 0;
+      }
+
+      // Counterparty addresses (addresses that aren't ours)
+      const counterparties: string[] = [];
+      if (direction === 'sent') {
+        tx.vout.forEach((v) => {
+          if (v.scriptpubkey_address && v.scriptpubkey_address !== address) {
+            counterparties.push(v.scriptpubkey_address);
+          }
+        });
+      } else if (direction === 'received') {
+        inputAddresses.forEach((a) => {
+          if (a !== address) counterparties.push(a);
+        });
+      }
+
+      return {
+        txHash: tx.txid,
+        direction,
+        amount,
+        fee: tx.fee,
+        timestamp: tx.status.block_time ?? 0,
+        blockHeight: tx.status.block_height ?? 0,
+        confirmed: tx.status.confirmed,
+        counterparties,
+      };
+    });
   }
 
   async getTransaction(txHash: string): Promise<string> {

@@ -6,7 +6,7 @@
  * Our v2 (QuickJS/C — HTTP only): BlockbookClient, MempoolRestClient.
  */
 
-import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry } from '../types.js';
+import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo } from '../types.js';
 
 export interface IBtcClient {
   /** Establish connection to the backend (no-op for HTTP clients) */
@@ -24,8 +24,15 @@ export interface IBtcClient {
   /** List unspent outputs for an address */
   listUnspent(address: string): Promise<ElectrumUnspent[]>;
 
-  /** Get transaction history for an address */
+  /** Get transaction history for an address — minimal Electrum shape */
   getHistory(address: string): Promise<ElectrumHistoryEntry[]>;
+
+  /**
+   * Get detailed transaction history with parsed direction, amounts, fees.
+   * Default implementation: calls getHistory() + getTransaction() per tx.
+   * MempoolRestClient overrides this with a single-call implementation.
+   */
+  getDetailedHistory(address: string, limit?: number): Promise<DetailedTxInfo[]>;
 
   /** Get raw transaction hex by txid */
   getTransaction(txHash: string): Promise<string>;

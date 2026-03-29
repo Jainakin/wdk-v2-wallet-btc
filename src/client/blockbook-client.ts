@@ -16,7 +16,7 @@
  */
 
 import type { IBtcClient } from './btc-client.js';
-import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, BtcNetwork } from '../types.js';
+import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo, BtcNetwork } from '../types.js';
 
 /** Default Blockbook server URLs per network */
 const BASE_URLS: Record<BtcNetwork, string> = {
@@ -134,6 +134,88 @@ export class BlockbookClient implements IBtcClient {
     }
 
     return data.result ?? '';
+  }
+
+  async getDetailedHistory(address: string, limit: number = 25): Promise<DetailedTxInfo[]> {
+    // Blockbook /api/v2/address/{addr}?details=txs returns full tx data
+    const data = await this.fetchJson<{
+      transactions?: Array<{
+        txid: string;
+        fees: string;
+        blockHeight: number;
+        blockTime: number;
+        confirmations: number;
+        vin: Array<{ addresses?: string[]; value: string }>;
+        vout: Array<{ addresses?: string[]; value: string }>;
+      }>;
+    }>(`/api/v2/address/${address}?details=txs&pageSize=${limit}`);
+
+    if (!data.transactions) return [];
+
+    return data.transactions.map((tx) => {
+      const inputAddresses = new Set(
+        tx.vin.flatMap((v) => v.addresses ?? [])
+      );
+      const outputAddresses = new Set(
+        tx.vout.flatMap((v) => v.addresses ?? [])
+      );
+
+      const isInInput = inputAddresses.has(address);
+      const isInOutput = outputAddresses.has(address);
+
+      let direction: 'sent' | 'received' | 'self';
+      if (isInInput && isInOutput) {
+        const allToUs = tx.vout.every(
+          (v) => !v.addresses || v.addresses.every((a) => a === address)
+        );
+        direction = allToUs ? 'self' : 'sent';
+      } else if (isInInput) {
+        direction = 'sent';
+      } else {
+        direction = 'received';
+      }
+
+      let amount: number;
+      if (direction === 'received') {
+        amount = tx.vout
+          .filter((v) => v.addresses?.includes(address))
+          .reduce((sum, v) => sum + parseInt(v.value, 10), 0);
+      } else if (direction === 'sent') {
+        const totalIn = tx.vin
+          .filter((v) => v.addresses?.includes(address))
+          .reduce((sum, v) => sum + parseInt(v.value, 10), 0);
+        const changeBack = tx.vout
+          .filter((v) => v.addresses?.includes(address))
+          .reduce((sum, v) => sum + parseInt(v.value, 10), 0);
+        amount = -(totalIn - changeBack);
+      } else {
+        amount = 0;
+      }
+
+      const counterparties: string[] = [];
+      if (direction === 'sent') {
+        tx.vout.forEach((v) => {
+          (v.addresses ?? []).forEach((a) => {
+            if (a !== address) counterparties.push(a);
+          });
+        });
+      } else if (direction === 'received') {
+        inputAddresses.forEach((a) => {
+          if (a !== address) counterparties.push(a);
+        });
+      }
+
+      return {
+        txHash: tx.txid,
+        direction,
+        amount,
+        fee: parseInt(tx.fees, 10) || 0,
+        timestamp: tx.blockTime ?? 0,
+        blockHeight: tx.blockHeight ?? 0,
+        confirmed: tx.confirmations > 0,
+        counterparties,
+      };
+    });
   }
 
   async estimateFee(blocks: number): Promise<number> {

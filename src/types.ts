@@ -68,6 +68,24 @@ export interface ElectrumHistoryEntry {
   height: number;
 }
 
+/** Rich transaction info for history display — parsed from full tx data */
+export interface DetailedTxInfo {
+  txHash: string;
+  /** 'sent' if address appears only in inputs, 'received' if only in outputs, 'self' if both */
+  direction: 'sent' | 'received' | 'self';
+  /** Net amount in satoshis (positive = received, negative = sent) */
+  amount: number;
+  /** Fee in satoshis (only available for sent txs) */
+  fee: number;
+  /** Unix timestamp (0 if unconfirmed) */
+  timestamp: number;
+  /** Block height (0 if unconfirmed) */
+  blockHeight: number;
+  confirmed: boolean;
+  /** Counterparty address(es) */
+  counterparties: string[];
+}
+
 /** Descriptor for creating a client via factory */
 export interface BtcClientDescriptor {
   type: 'blockbook' | 'mempool-rest';

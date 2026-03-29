@@ -215,29 +215,31 @@ export class BitcoinWallet extends BaseWallet {
   // -----------------------------------------------------------------------
 
   /**
-   * Fetch transaction history for an address.
-   * Uses IBtcClient.getHistory() for tx list.
-   *
-   * Note: IBtcClient.getHistory() returns minimal data ({tx_hash, height}).
-   * For rich detail (from/to/amount), we return what's available.
-   * MempoolRestClient's getHistory includes all txids; a future enhancement
-   * can fetch individual tx details via client.getTransaction().
+   * Fetch transaction history with full parsed details.
+   * Uses IBtcClient.getDetailedHistory() which returns direction, amounts,
+   * fees, counterparties — parsed from full transaction data.
    */
   async getTransactionHistory(
     address: string,
     limit: number = 25,
   ): Promise<TxRecord[]> {
-    const entries = await this.client.getHistory(address);
+    const detailed = await this.client.getDetailedHistory(address, limit);
 
-    return entries.slice(0, limit).map((entry) => ({
-      txHash: entry.tx_hash,
+    return detailed.map((tx) => ({
+      txHash: tx.txHash,
       chain: 'btc' as const,
-      from: '',
-      to: address,
-      amount: '0',
-      timestamp: 0,
-      status: entry.height > 0 ? ('confirmed' as const) : ('pending' as const),
-      blockNumber: entry.height > 0 ? entry.height : undefined,
+      from: tx.direction === 'received'
+        ? (tx.counterparties[0] ?? '')
+        : address,
+      to: tx.direction === 'sent'
+        ? (tx.counterparties[0] ?? '')
+        : address,
+      amount: String(Math.abs(tx.amount)),
+      fee: String(tx.fee),
+      direction: tx.direction,
+      timestamp: tx.timestamp,
+      status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
+      blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
     }));
   }
 
