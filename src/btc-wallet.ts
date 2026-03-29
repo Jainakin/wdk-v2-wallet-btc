@@ -22,8 +22,8 @@ import type {
   TxRecord,
 } from '@aspect/wdk-v2-utils';
 import { generateSegwitAddress } from './address.js';
-import { selectUtxos } from './utxo.js';
-import { buildTransaction } from './transaction.js';
+import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH, MIN_TX_FEE_SATS } from './utxo.js';
+import { buildTransaction, addressToScriptPubKey } from './transaction.js';
 import type { IBtcClient } from './client/btc-client.js';
 import { createClient, MempoolRestClient } from './client/index.js';
 import type { UTXO, BtcUnsignedTx, BtcNetwork } from './types.js';
@@ -93,6 +93,104 @@ export class BitcoinWallet extends BaseWallet {
   }
 
   // -----------------------------------------------------------------------
+  // Quote + Max Spendable (production parity: quoteSendTransaction, getMaxSpendable)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Preview a send transaction without signing or broadcasting.
+   * Returns estimated fee, input/output counts, and whether the tx is feasible.
+   * Matches production WDK's quoteSendTransaction().
+   */
+  async quoteSendTransaction(params: {
+    from: string;
+    to: string;
+    amount: string;
+  }): Promise<{
+    feasible: boolean;
+    fee: number;
+    feeRate: number;
+    inputCount: number;
+    outputCount: number;
+    totalInput: number;
+    change: number;
+    error?: string;
+  }> {
+    const targetSats = parseInt(params.amount, 10);
+    if (isNaN(targetSats) || targetSats <= 0) {
+      return {
+        feasible: false, fee: 0, feeRate: 0, inputCount: 0,
+        outputCount: 0, totalInput: 0, change: 0,
+        error: `Invalid amount: ${params.amount}`,
+      };
+    }
+
+    try {
+      const electrumUtxos = await this.client.listUnspent(params.from);
+      const utxos: UTXO[] = electrumUtxos.map((u) => ({
+        txid: u.tx_hash, vout: u.tx_pos, value: u.value,
+        scriptPubKey: '', address: params.from,
+      }));
+
+      const btcPerKb = await this.client.estimateFee(3);
+      const feeRate = Math.ceil((btcPerKb * 1e8) / 1000);
+
+      const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH);
+      if (!selection) {
+        return {
+          feasible: false, fee: 0, feeRate, inputCount: 0,
+          outputCount: 0, totalInput: utxos.reduce((s, u) => s + u.value, 0), change: 0,
+          error: 'Insufficient funds',
+        };
+      }
+
+      return {
+        feasible: true,
+        fee: selection.fee,
+        feeRate,
+        inputCount: selection.selected.length,
+        outputCount: selection.change > 0 ? 2 : 1,
+        totalInput: selection.selected.reduce((s, u) => s + u.value, 0),
+        change: selection.change,
+      };
+    } catch (e: any) {
+      return {
+        feasible: false, fee: 0, feeRate: 0, inputCount: 0,
+        outputCount: 0, totalInput: 0, change: 0,
+        error: e.message ?? String(e),
+      };
+    }
+  }
+
+  /**
+   * Calculate the maximum amount that can be sent from an address.
+   * Accounts for fee, dust threshold, and MAX_UTXO_INPUTS.
+   * Matches production WDK's getMaxSpendable().
+   */
+  async getMaxSpendable(address: string): Promise<{
+    maxSpendable: number;
+    fee: number;
+    utxoCount: number;
+  }> {
+    const electrumUtxos = await this.client.listUnspent(address);
+    const utxos: UTXO[] = electrumUtxos.map((u) => ({
+      txid: u.tx_hash, vout: u.tx_pos, value: u.value,
+      scriptPubKey: '', address,
+    }));
+
+    const btcPerKb = await this.client.estimateFee(3);
+    const feeRate = Math.ceil((btcPerKb * 1e8) / 1000);
+
+    const maxSpendable = calculateMaxSpendable(utxos, feeRate, DUST_THRESHOLD_P2WPKH);
+    const totalInput = utxos.reduce((s, u) => s + u.value, 0);
+
+    return {
+      maxSpendable,
+      fee: totalInput - maxSpendable,
+      utxoCount: utxos.length,
+    };
+  }
+
+  // -----------------------------------------------------------------------
   // Build transaction
   // -----------------------------------------------------------------------
 
@@ -121,11 +219,15 @@ export class BitcoinWallet extends BaseWallet {
 
     // 1. Fetch UTXOs via client interface
     const electrumUtxos = await this.client.listUnspent(fromAddress);
+    // Derive scriptPubKey from the sender address (needed for signing/PSBT)
+    const senderScriptPubKey = native.encoding.hexEncode(
+      addressToScriptPubKey(fromAddress)
+    );
     const utxos: UTXO[] = electrumUtxos.map((u) => ({
       txid: u.tx_hash,
       vout: u.tx_pos,
       value: u.value,
-      scriptPubKey: '',
+      scriptPubKey: senderScriptPubKey,
       address: fromAddress,
       confirmations: u.height > 0 ? 1 : 0,
     }));

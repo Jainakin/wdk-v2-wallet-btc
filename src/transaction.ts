@@ -133,7 +133,7 @@ function reverseTxid(txidHex: string): Uint8Array {
  *   P2WSH  (bc1q...32byte):   OP_0 <32-byte-hash> → 0020{hash}
  *   P2TR   (bc1p.../tb1p...): OP_1 <32-byte-key>  → 5120{key}
  */
-function addressToScriptPubKey(address: string): Uint8Array {
+export function addressToScriptPubKey(address: string): Uint8Array {
   // ── Try base58check first (P2PKH / P2SH) ──
   try {
     const raw = native.encoding.base58CheckDecode(address);
