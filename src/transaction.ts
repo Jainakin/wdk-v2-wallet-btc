@@ -124,24 +124,61 @@ function reverseTxid(txidHex: string): Uint8Array {
 // ---------------------------------------------------------------------------
 
 /**
- * Encode a bech32 address into its witness scriptPubKey.
+ * Encode any Bitcoin address into its scriptPubKey.
  *
- * For P2WPKH (bc1q...): OP_0 <20-byte-hash>  →  0x0014{hash}
- * For P2WSH  (bc1q...): OP_0 <32-byte-hash>  →  0x0020{hash}
- *
- * This decodes the bech32 address to extract the witness program.
+ * Supports:
+ *   P2PKH  (1.../m.../n...):  OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG → 76a914{hash}88ac
+ *   P2SH   (3.../2...):       OP_HASH160 <20> OP_EQUAL → a914{hash}87
+ *   P2WPKH (bc1q.../tb1q...): OP_0 <20-byte-hash> → 0014{hash}
+ *   P2WSH  (bc1q...32byte):   OP_0 <32-byte-hash> → 0020{hash}
+ *   P2TR   (bc1p.../tb1p...): OP_1 <32-byte-key>  → 5120{key}
  */
 function addressToScriptPubKey(address: string): Uint8Array {
-  // Determine if bech32 or bech32m by trying decode
+  // ── Try base58check first (P2PKH / P2SH) ──
+  try {
+    const raw = native.encoding.base58CheckDecode(address);
+    if (raw.length === 21) {
+      const version = raw[0];
+      const hash = raw.slice(1);
+
+      // P2PKH: version 0x00 (mainnet) or 0x6f (testnet)
+      if (version === 0x00 || version === 0x6f) {
+        // OP_DUP OP_HASH160 OP_PUSH20 <hash> OP_EQUALVERIFY OP_CHECKSIG
+        const script = new Uint8Array(25);
+        script[0] = 0x76; // OP_DUP
+        script[1] = 0xa9; // OP_HASH160
+        script[2] = 0x14; // push 20 bytes
+        script.set(hash, 3);
+        script[23] = 0x88; // OP_EQUALVERIFY
+        script[24] = 0xac; // OP_CHECKSIG
+        return script;
+      }
+
+      // P2SH: version 0x05 (mainnet) or 0xc4 (testnet)
+      if (version === 0x05 || version === 0xc4) {
+        // OP_HASH160 OP_PUSH20 <hash> OP_EQUAL
+        const script = new Uint8Array(23);
+        script[0] = 0xa9; // OP_HASH160
+        script[1] = 0x14; // push 20 bytes
+        script.set(hash, 2);
+        script[22] = 0x87; // OP_EQUAL
+        return script;
+      }
+    }
+  } catch {
+    // Not base58check — try bech32 below
+  }
+
+  // ── Try bech32 (witness v0: P2WPKH / P2WSH) ──
   let decoded: { hrp: string; data: Uint8Array };
   try {
     decoded = native.encoding.bech32Decode(address);
   } catch {
-    // Try bech32m for witness v1+ (taproot)
+    // ── Try bech32m (witness v1+: P2TR) ──
     try {
       decoded = native.encoding.bech32mDecode(address);
     } catch {
-      throw new Error(`Unsupported address format: ${address}. Only bech32 (bc1q) and bech32m (bc1p) addresses are supported.`);
+      throw new Error(`Unsupported address format: ${address}`);
     }
   }
 
