@@ -56,19 +56,10 @@ export function selectUtxos(
     if (totalInput >= targetAmount + fee2) {
       const change = totalInput - targetAmount - fee2;
 
-      // If change is dust, drop the change output and recalculate fee
-      // with only 1 output.  The "lost" change becomes extra fee.
+      // If change is sub-dust (< 546 sats), discard it into the miner fee
+      // rather than creating an uneconomical output Bitcoin nodes may reject.
       if (change > 0 && change < DUST_THRESHOLD) {
-        const vbytes1 =
-          TX_OVERHEAD_VBYTES +
-          selected.length * VBYTES_PER_INPUT +
-          1 * VBYTES_PER_OUTPUT;
-        const fee1 = Math.ceil(vbytes1 * feeRate);
-        const feeWithDust = totalInput - targetAmount;
-        // Only if we still cover the 1-output fee
-        if (feeWithDust >= fee1) {
-          return { selected, fee: feeWithDust, change: 0 };
-        }
+        return { selected, fee: totalInput - targetAmount, change: 0 };
       }
 
       return { selected, fee: fee2, change };

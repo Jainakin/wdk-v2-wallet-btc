@@ -1,0 +1,215 @@
+/**
+ * BlockbookClient — IBtcClient implementation using the Blockbook v2 REST API.
+ *
+ * Matches the production tetherto/wdk-wallet-btc BlockbookClient exactly.
+ * This is one of the three production-supported transports.
+ *
+ * Endpoints (Blockbook v2):
+ *   GET /api/v2/address/{addr}?details=basic              → getBalance
+ *   GET /api/v2/utxo/{addr}                               → listUnspent
+ *   GET /api/v2/address/{addr}?details=txslight&pageSize=N → getHistory
+ *   GET /api/v2/tx/{txHash}                               → getTransaction (hex field)
+ *   GET /api/v2/sendtx/{rawTxHex}                         → broadcast
+ *   GET /api/v2/estimatefee/{blocks}                      → estimateFee (BTC/kB)
+ *
+ * Default servers: btc1.trezor.io (mainnet), tbtc1.trezor.io (testnet)
+ */
+
+import type { IBtcClient } from './btc-client.js';
+import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, BtcNetwork } from '../types.js';
+
+/** Default Blockbook server URLs per network */
+const BASE_URLS: Record<BtcNetwork, string> = {
+  bitcoin: 'https://btc1.trezor.io',
+  testnet: 'https://tbtc1.trezor.io',
+  regtest: '', // regtest needs user-provided URL
+};
+
+/** Mempool.space fallback for fee estimation when Blockbook fails */
+const MEMPOOL_FEE_URL = 'https://mempool.space/api/v1/fees/recommended';
+
+export class BlockbookClient implements IBtcClient {
+  private readonly baseUrl: string;
+
+  constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
+    this.baseUrl = customUrl
+      ? customUrl.replace(/\/$/, '')
+      : BASE_URLS[network];
+
+    if (!this.baseUrl) {
+      throw new Error(
+        `No default Blockbook server for network '${network}'. Provide a custom URL.`,
+      );
+    }
+  }
+
+  async connect(): Promise<void> { /* no-op for HTTP REST */ }
+  async close(): Promise<void> { /* no-op */ }
+  async reconnect(): Promise<void> { /* no-op */ }
+
+  async getBalance(address: string): Promise<BtcBalance> {
+    const data = await this.fetchJson<{
+      balance: string;
+      unconfirmedBalance: string;
+    }>(`/api/v2/address/${address}?details=basic`);
+
+    return {
+      confirmed: Number(data.balance),
+      unconfirmed: Number(data.unconfirmedBalance),
+    };
+  }
+
+  async listUnspent(address: string): Promise<ElectrumUnspent[]> {
+    const utxos = await this.fetchJson<Array<{
+      txid: string;
+      vout: number;
+      value: string;
+      height?: number;
+      confirmations?: number;
+    }>>(`/api/v2/utxo/${address}`);
+
+    return utxos.map((u) => ({
+      tx_hash: u.txid,
+      tx_pos: u.vout,
+      value: Number(u.value),
+      height: u.height ?? 0,
+    }));
+  }
+
+  async getHistory(address: string): Promise<ElectrumHistoryEntry[]> {
+    // Fetch with txslight detail for transaction metadata
+    const entries: ElectrumHistoryEntry[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    while (page <= totalPages) {
+      const data = await this.fetchJson<{
+        page: number;
+        totalPages: number;
+        txs?: number;
+        transactions?: Array<{
+          txid: string;
+          blockHeight: number;
+        }>;
+      }>(`/api/v2/address/${address}?details=txslight&pageSize=1000&page=${page}`);
+
+      totalPages = data.totalPages;
+
+      if (data.transactions) {
+        for (const tx of data.transactions) {
+          entries.push({
+            tx_hash: tx.txid,
+            height: tx.blockHeight > 0 ? tx.blockHeight : 0,
+          });
+        }
+      }
+
+      page++;
+    }
+
+    return entries;
+  }
+
+  async getTransaction(txHash: string): Promise<string> {
+    const data = await this.fetchJson<{
+      hex?: string;
+    }>(`/api/v2/tx/${txHash}`);
+
+    if (!data.hex) {
+      throw new Error(`No hex data in Blockbook response for tx ${txHash}`);
+    }
+
+    return data.hex;
+  }
+
+  async broadcast(rawTx: string): Promise<string> {
+    // Production Blockbook uses GET /api/v2/sendtx/{hex}
+    const data = await this.fetchJson<{
+      result?: string;
+      error?: string;
+    }>(`/api/v2/sendtx/${rawTx}`);
+
+    if (data.error) {
+      throw new Error(`Broadcast failed: ${data.error}`);
+    }
+
+    return data.result ?? '';
+  }
+
+  async estimateFee(blocks: number): Promise<number> {
+    try {
+      // Primary: Blockbook's own fee estimation
+      const data = await this.fetchJson<{
+        result: string;
+      }>(`/api/v2/estimatefee/${blocks}`);
+
+      const rate = parseFloat(data.result);
+      if (rate > 0) return rate; // BTC/kB
+
+      // If rate is 0 or negative, fall through to mempool fallback
+    } catch {
+      // Blockbook fee estimation failed, fall through
+    }
+
+    // Fallback: mempool.space (matches production BlockbookClient behavior)
+    return this.estimateFeeFromMempool(blocks);
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Fallback fee estimation from mempool.space.
+   * Matches production blockbook-client.js _estimateFeeFromMempool().
+   */
+  private async estimateFeeFromMempool(blocks: number): Promise<number> {
+    const response = await native.net.fetch(MEMPOOL_FEE_URL);
+
+    if (response.status !== 200) {
+      throw new Error('Fee estimation failed from both Blockbook and mempool.space');
+    }
+
+    const bodyText = response.body
+      ? native.encoding.utf8Decode(response.body)
+      : '';
+    const data = JSON.parse(bodyText) as {
+      fastestFee: number;
+      halfHourFee: number;
+      hourFee: number;
+      economyFee: number;
+    };
+
+    // Select tier by block target
+    let satPerVb: number;
+    if (blocks <= 1) {
+      satPerVb = data.fastestFee;
+    } else if (blocks <= 3) {
+      satPerVb = data.halfHourFee;
+    } else if (blocks <= 6) {
+      satPerVb = data.hourFee;
+    } else {
+      satPerVb = data.economyFee;
+    }
+
+    // Convert sat/vB → BTC/kB: (satPerVb * 1000) / 1e8
+    // This matches production's division by 100_000
+    return satPerVb / 100_000;
+  }
+
+  private async fetchJson<T>(path: string): Promise<T> {
+    const response = await native.net.fetch(`${this.baseUrl}${path}`);
+
+    if (response.status !== 200) {
+      const body = response.body
+        ? native.encoding.utf8Decode(response.body)
+        : '';
+      throw new Error(
+        `Blockbook API error: status ${response.status} for ${path}: ${body}`,
+      );
+    }
+
+    const bodyText = response.body
+      ? native.encoding.utf8Decode(response.body)
+      : '';
+    return JSON.parse(bodyText) as T;
+  }
+}

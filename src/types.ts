@@ -42,3 +42,35 @@ export interface FeeEstimate {
   medium: number;  // sat/vbyte for ~3 blocks
   slow: number;    // sat/vbyte for ~6 blocks
 }
+
+// ── Client types (matching production tetherto/wdk-wallet-btc) ──────────────
+
+/** Bitcoin network identifier — matches production WDK */
+export type BtcNetwork = 'bitcoin' | 'testnet' | 'regtest';
+
+/** Balance result from IBtcClient.getBalance() */
+export interface BtcBalance {
+  confirmed: number;   // satoshis
+  unconfirmed: number; // satoshis
+}
+
+/** UTXO as returned by IBtcClient.listUnspent() — Electrum-style shape */
+export interface ElectrumUnspent {
+  tx_hash: string;
+  tx_pos: number;
+  value: number;
+  height: number;
+}
+
+/** History entry as returned by IBtcClient.getHistory() — Electrum-style shape */
+export interface ElectrumHistoryEntry {
+  tx_hash: string;
+  height: number;
+}
+
+/** Descriptor for creating a client via factory */
+export interface BtcClientDescriptor {
+  type: 'blockbook' | 'mempool-rest';
+  url?: string;
+  network?: BtcNetwork;
+}

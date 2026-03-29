@@ -138,7 +138,11 @@ function addressToScriptPubKey(address: string): Uint8Array {
     decoded = native.encoding.bech32Decode(address);
   } catch {
     // Try bech32m for witness v1+ (taproot)
-    decoded = native.encoding.bech32mDecode(address);
+    try {
+      decoded = native.encoding.bech32mDecode(address);
+    } catch {
+      throw new Error(`Unsupported address format: ${address}. Only bech32 (bc1q) and bech32m (bc1p) addresses are supported.`);
+    }
   }
 
   const witnessVersion = decoded.data[0];
