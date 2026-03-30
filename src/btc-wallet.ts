@@ -23,7 +23,8 @@ import type {
 } from '@aspect/wdk-v2-utils';
 import { generateSegwitAddress, convertBits } from './address.js';
 import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH, MIN_TX_FEE_SATS } from './utxo.js';
-import { buildTransaction, addressToScriptPubKey } from './transaction.js';
+import { addressToScriptPubKey } from './transaction.js';
+import { buildAndSignPsbt } from './psbt.js';
 import type { IBtcClient } from './client/btc-client.js';
 import { createClient, MempoolRestClient } from './client/index.js';
 import type { UTXO, BtcUnsignedTx, BtcNetwork, TransferQuery, TransferResult } from './types.js';
@@ -317,7 +318,9 @@ export class BitcoinWallet extends BaseWallet {
   ): Promise<SignedTx> {
     const btcTx = tx.data as BtcUnsignedTx;
     const keyHandles = btcTx.inputs.map(() => keyHandle);
-    const signed = buildTransaction(btcTx.inputs, btcTx.outputs, keyHandles);
+
+    // Use PSBT (BIP-174) for signing — supports P2WPKH, P2PKH, mixed inputs
+    const signed = buildAndSignPsbt(btcTx.inputs, btcTx.outputs, keyHandles);
 
     return {
       chain: 'btc',
