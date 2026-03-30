@@ -95,6 +95,39 @@ export function generateSegwitAddress(
 }
 
 /**
+ * Generate a BIP-44 legacy (P2PKH) address from a key handle.
+ *
+ * Steps:
+ *   1. Get compressed public key (33 bytes)
+ *   2. Hash160 (SHA256 → RIPEMD160)
+ *   3. Prepend version byte: 0x00 (mainnet) or 0x6f (testnet/regtest)
+ *   4. Base58Check encode
+ *
+ * @param keyHandle  Key handle for the derived key
+ * @param isTestnet  Use testnet version byte
+ * @returns Base58Check-encoded P2PKH address (1... mainnet, m/n... testnet)
+ */
+export function generateLegacyAddress(
+  keyHandle: number,
+  isTestnet: boolean = false,
+): string {
+  const pubkey = native.crypto.getPublicKey(keyHandle, 'secp256k1');
+  const sha = native.crypto.sha256(pubkey);
+  const hash160 = native.crypto.ripemd160(sha);
+
+  // Version byte: 0x00 for mainnet, 0x6f for testnet/regtest
+  const version = isTestnet ? 0x6f : 0x00;
+  const payload = new Uint8Array(21);
+  payload[0] = version;
+  payload.set(hash160, 1);
+
+  return native.encoding.base58CheckEncode(payload);
+}
+
+/** Address type — BIP-84 native segwit or BIP-44 legacy */
+export type BtcAddressType = 'p2wpkh' | 'p2pkh';
+
+/**
  * Derive a BIP-84 key and generate its SegWit address.
  *
  * Path: m/84'/{coinType}'/{account}'/0/{index}

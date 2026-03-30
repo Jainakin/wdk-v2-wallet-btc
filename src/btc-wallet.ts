@@ -21,7 +21,8 @@ import type {
   SignedTx,
   TxRecord,
 } from '@aspect/wdk-v2-utils';
-import { generateSegwitAddress, convertBits } from './address.js';
+import { generateSegwitAddress, generateLegacyAddress, convertBits } from './address.js';
+import type { BtcAddressType } from './address.js';
 import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH, MIN_TX_FEE_SATS } from './utxo.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
@@ -66,17 +67,22 @@ export class BitcoinWallet extends BaseWallet {
 
   /**
    * BTC native SegWit (P2WPKH) uses BIP-84: m/84'/coinType'/account'/change/index
+   * BTC legacy (P2PKH) uses BIP-44: m/44'/coinType'/account'/change/index
    * coinType is set dynamically in initialize(): 0 for mainnet, 1 for testnet.
    */
-  override getDerivationPath(index: number): string {
-    return `m/84'/${this.coinType}'/0'/0/${index}`;
+  override getDerivationPath(index: number, addressType?: string): string {
+    const purpose = addressType === 'p2pkh' ? 44 : 84;
+    return `m/${purpose}'/${this.coinType}'/0'/0/${index}`;
   }
 
   // -----------------------------------------------------------------------
   // Address
   // -----------------------------------------------------------------------
 
-  async getAddress(keyHandle: KeyHandle, _index: number): Promise<string> {
+  async getAddress(keyHandle: KeyHandle, _index: number, addressType?: string): Promise<string> {
+    if (addressType === 'p2pkh') {
+      return generateLegacyAddress(keyHandle, this.isTestnet);
+    }
     return generateSegwitAddress(keyHandle, this.isTestnet, this.network);
   }
 
