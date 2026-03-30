@@ -10,4 +10,5 @@ export { estimateTxVbytes, calculateFee } from './fees.js';
 export type { IBtcClient } from './client/btc-client.js';
 export { BlockbookClient } from './client/blockbook-client.js';
 export { MempoolRestClient } from './client/mempool-rest-client.js';
+export { ElectrumWsClient } from './client/electrum-ws-client.js';
 export { createClient } from './client/index.js';

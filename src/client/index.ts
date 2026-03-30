@@ -10,11 +10,13 @@
 export type { IBtcClient } from './btc-client.js';
 export { BlockbookClient } from './blockbook-client.js';
 export { MempoolRestClient } from './mempool-rest-client.js';
+export { ElectrumWsClient } from './electrum-ws-client.js';
 
 import type { IBtcClient } from './btc-client.js';
 import type { BtcClientDescriptor, BtcNetwork } from '../types.js';
 import { BlockbookClient } from './blockbook-client.js';
 import { MempoolRestClient } from './mempool-rest-client.js';
+import { ElectrumWsClient } from './electrum-ws-client.js';
 
 /**
  * Create an IBtcClient from a descriptor object, or pass through an
@@ -49,13 +51,14 @@ export function createClient(
       return new BlockbookClient(net, desc.url);
     case 'mempool-rest':
       return new MempoolRestClient(net, desc.url);
-    // Production Electrum descriptors — not yet implemented, but recognized
-    // so config doesn't silently break when switching from production
-    case 'electrum':
+    // Electrum WebSocket — production-compatible transport
     case 'electrum-ws':
+      return new ElectrumWsClient(net, desc.url);
+    // Electrum TCP — not yet supported (requires native TCP bridge)
+    case 'electrum':
       throw new Error(
-        `BTC client type "${desc.type}" is recognized but not yet implemented in v2. ` +
-        `Use "blockbook-http" or "mempool-rest" instead.`
+        `BTC client type "electrum" (TCP) is not yet implemented in v2. ` +
+        `Use "electrum-ws" for WebSocket or "blockbook-http"/"mempool-rest" for HTTP.`
       );
     default:
       throw new Error(`Unknown BTC client type: ${(desc as any).type}`);
