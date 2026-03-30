@@ -128,11 +128,14 @@ export class BitcoinWallet extends BaseWallet {
     ]);
     // Convert BTC/kB → sat/vB
     const toSatVb = (btcPerKb: number) => Math.ceil((btcPerKb * 1e8) / 1000);
-    return {
+    const rates = {
       fast: toSatVb(fast),
       medium: toSatVb(medium),
       slow: toSatVb(slow),
+      // Production aliases (production returns { normal, fast } as BigInt)
+      normal: toSatVb(medium),  // production 'normal' = our 'medium'
     };
+    return rates;
   }
 
   // -----------------------------------------------------------------------
@@ -526,7 +529,7 @@ export class BitcoinWallet extends BaseWallet {
    * @param keyHandle  Key handle for the signing key
    * @returns base64-encoded signature string
    */
-  async signMessage(message: string, keyHandle: KeyHandle): Promise<string> {
+  override async signMessage(keyHandle: KeyHandle, message: string): Promise<string> {
     const msgHash = this.bitcoinMessageHash(message);
     // Sign with recoverable signature → 65 bytes (64 compact + 1 recid)
     const recoverableSig = native.crypto.signRecoverableSecp256k1(keyHandle, msgHash);
@@ -554,7 +557,7 @@ export class BitcoinWallet extends BaseWallet {
    * @param address    The expected Bitcoin address
    * @returns true if the signature is valid for this address
    */
-  async verifyMessage(message: string, signature: string, address: string): Promise<boolean> {
+  override async verifyMessage(message: string, signature: string, address: string): Promise<boolean> {
     const sigBytes = this.base64ToUint8Array(signature);
     if (sigBytes.length !== 65) return false;
 
