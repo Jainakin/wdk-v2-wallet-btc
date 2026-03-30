@@ -238,30 +238,34 @@ export class MempoolRestClient implements IBtcClient {
   }
 
   async estimateFee(blocks: number): Promise<number> {
-    const data = await this.fetchJson<{
-      fastestFee: number;
-      halfHourFee: number;
-      hourFee: number;
-      economyFee: number;
-      minimumFee: number;
-    }>('/v1/fees/recommended');
+    try {
+      const data = await this.fetchJson<{
+        fastestFee: number;
+        halfHourFee: number;
+        hourFee: number;
+        economyFee: number;
+        minimumFee: number;
+      }>('/v1/fees/recommended');
 
-    // Select tier by block target (matches production BlockbookClient fallback)
-    let satPerVb: number;
-    if (blocks <= 1) {
-      satPerVb = data.fastestFee;
-    } else if (blocks <= 3) {
-      satPerVb = data.halfHourFee;
-    } else if (blocks <= 6) {
-      satPerVb = data.hourFee;
-    } else {
-      satPerVb = data.economyFee;
+      // Select tier by block target (matches production BlockbookClient fallback)
+      let satPerVb: number;
+      if (blocks <= 1) {
+        satPerVb = data.fastestFee;
+      } else if (blocks <= 3) {
+        satPerVb = data.halfHourFee;
+      } else if (blocks <= 6) {
+        satPerVb = data.hourFee;
+      } else {
+        satPerVb = data.economyFee;
+      }
+
+      // Convert sat/vB → BTC/kB (production IBtcClient convention)
+      return (satPerVb * 1000) / 1e8;
+    } catch {
+      // Fallback for regtest/local electrs where fee endpoint may not exist.
+      // Use 1 sat/vB (minimum relay fee) converted to BTC/kB.
+      return (1 * 1000) / 1e8; // 0.00001 BTC/kB = 1 sat/vB
     }
-
-    // Convert sat/vB → BTC/kB (production IBtcClient convention)
-    // 1 kB = 1000 vbytes, 1 BTC = 1e8 sat
-    // BTC/kB = satPerVb * 1000 / 1e8
-    return (satPerVb * 1000) / 1e8;
   }
 
   async getBlockHeight(): Promise<number> {

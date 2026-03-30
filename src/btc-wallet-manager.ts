@@ -31,6 +31,10 @@ export class BtcWalletManager extends WalletManager {
   async initialize(config: NetworkConfig): Promise<void> {
     this.config = config;
 
+    // Clear cached accounts from previous network configuration
+    // (same derivation path produces different addresses on different networks)
+    this.clearAccounts();
+
     // Determine network
     this.network_ = (config.network as BtcNetwork)
       ?? (config.isTestnet ? 'testnet' : 'bitcoin');
