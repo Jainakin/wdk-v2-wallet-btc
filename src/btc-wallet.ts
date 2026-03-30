@@ -30,6 +30,12 @@ import type { IBtcClient } from './client/btc-client.js';
 import { createClient, ElectrumWsClient, MempoolRestClient } from './client/index.js';
 import type { UTXO, BtcUnsignedTx, BtcNetwork, TransferQuery, TransferResult, DetailedTxInfo } from './types.js';
 
+/**
+ * @deprecated Use BtcWalletManager + BtcAccount pattern instead.
+ * BitcoinWallet is preserved for backward compatibility only.
+ * The production-parity account model is in btc-wallet-manager.ts,
+ * btc-account.ts, and btc-account-read-only.ts.
+ */
 export class BitcoinWallet extends BaseWallet {
   private isTestnet: boolean = false;
   private network: BtcNetwork = 'bitcoin';
