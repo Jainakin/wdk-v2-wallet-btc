@@ -27,7 +27,7 @@ import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH, MIN_TX_FEE_S
 import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
 import type { IBtcClient } from './client/btc-client.js';
-import { createClient, MempoolRestClient } from './client/index.js';
+import { createClient, ElectrumWsClient, MempoolRestClient } from './client/index.js';
 import type { UTXO, BtcUnsignedTx, BtcNetwork, TransferQuery, TransferResult } from './types.js';
 
 export class BitcoinWallet extends BaseWallet {
@@ -55,14 +55,23 @@ export class BitcoinWallet extends BaseWallet {
     this.coinType = this.network === 'bitcoin' ? 0 : 1;
 
     // Create or accept the chain data client
+    // Default matches production: Electrum WebSocket (wss://blockstream.info)
+    // Falls back to MempoolRestClient if Electrum connection fails
     if (config.btcClient) {
       this.client = createClient(config.btcClient, this.network);
+      await this.client.connect();
     } else {
-      // Default: MempoolRestClient (preserves current working behavior)
-      this.client = new MempoolRestClient(this.network);
+      // Try Electrum WebSocket first (production default transport)
+      try {
+        const electrum = new ElectrumWsClient(this.network);
+        await electrum.connect();
+        this.client = electrum;
+      } catch {
+        // Fallback: MempoolRestClient (HTTP REST — always available)
+        this.client = new MempoolRestClient(this.network);
+        await this.client.connect();
+      }
     }
-
-    await this.client.connect();
   }
 
   /**
