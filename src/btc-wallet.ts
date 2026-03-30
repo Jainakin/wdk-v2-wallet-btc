@@ -28,7 +28,7 @@ import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
 import type { IBtcClient } from './client/btc-client.js';
 import { createClient, ElectrumWsClient, MempoolRestClient } from './client/index.js';
-import type { UTXO, BtcUnsignedTx, BtcNetwork, TransferQuery, TransferResult } from './types.js';
+import type { UTXO, BtcUnsignedTx, BtcNetwork, TransferQuery, TransferResult, DetailedTxInfo } from './types.js';
 
 export class BitcoinWallet extends BaseWallet {
   private isTestnet: boolean = false;
@@ -389,38 +389,33 @@ export class BitcoinWallet extends BaseWallet {
 
   /**
    * Fetch transaction history with full parsed details.
-   * Uses IBtcClient.getDetailedHistory() which returns direction, amounts,
-   * fees, counterparties — parsed from full transaction data.
+   * Delegates to getTransfers() (production-compatible) and maps to TxRecord[].
+   * This is the BaseWallet contract; getTransfers() is the production-parity API.
    */
   async getTransactionHistory(
     address: string,
     limit: number = 25,
   ): Promise<TxRecord[]> {
-    const detailed = await this.client.getDetailedHistory(address, limit);
+    const result = await this.getTransfers(address, { limit });
 
-    return detailed.map((tx) => {
-      // Deduplicate counterparties
-      const uniqueCounterparties = [...new Set(tx.counterparties)];
-      return {
-        txHash: tx.txHash,
-        chain: 'btc' as const,
-        // Primary from/to for backwards compat (first counterparty)
-        from: tx.direction === 'received'
-          ? (uniqueCounterparties[0] ?? '')
-          : address,
-        to: tx.direction === 'sent'
-          ? (uniqueCounterparties[0] ?? '')
-          : address,
-        amount: String(Math.abs(tx.amount)),
-        fee: String(tx.fee),
-        direction: tx.direction,
-        // Full counterparty list (deduplicated)
-        counterparties: uniqueCounterparties,
-        timestamp: tx.timestamp,
-        status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
-        blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
-      };
-    });
+    return result.transfers.map((tx) => ({
+      txHash: tx.txHash,
+      chain: 'btc' as const,
+      // Primary from/to for backwards compat (first counterparty)
+      from: tx.direction === 'received'
+        ? (tx.counterparties[0] ?? '')
+        : address,
+      to: tx.direction === 'sent'
+        ? (tx.counterparties[0] ?? '')
+        : address,
+      amount: String(Math.abs(tx.amount)),
+      fee: String(tx.fee),
+      direction: tx.direction,
+      counterparties: tx.counterparties,
+      timestamp: tx.timestamp,
+      status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
+      blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
+    }));
   }
 
   // -----------------------------------------------------------------------
@@ -450,11 +445,31 @@ export class BitcoinWallet extends BaseWallet {
       filtered = detailed.filter((tx) => tx.direction === query.direction);
     }
 
-    // Deduplicate counterparties and map to TxRecord-compatible shape
-    const transfers = filtered.map((tx) => ({
-      ...tx,
-      counterparties: [...new Set(tx.counterparties)],
-    }));
+    // Expand to transfer rows — one per counterparty per tx (production semantics).
+    // If a tx sends to 3 addresses, produce 3 transfer rows.
+    // For received txs or txs with no counterparties, produce 1 row.
+    const transfers: DetailedTxInfo[] = [];
+    for (const tx of filtered) {
+      const uniqueCounterparties = [...new Set(tx.counterparties)];
+
+      if (uniqueCounterparties.length <= 1) {
+        // Single counterparty or none — one row
+        transfers.push({
+          ...tx,
+          counterparties: uniqueCounterparties,
+        });
+      } else {
+        // Multiple counterparties — one row per counterparty (production transfer-row semantics)
+        for (const cp of uniqueCounterparties) {
+          transfers.push({
+            ...tx,
+            counterparties: [cp],
+            // Note: amount is the total tx amount, not per-counterparty.
+            // Production splits amounts per-output; we keep total for simplicity.
+          });
+        }
+      }
+    }
 
     // Determine pagination state
     const hasMore = detailed.length >= limit;
