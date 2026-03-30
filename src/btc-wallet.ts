@@ -327,22 +327,29 @@ export class BitcoinWallet extends BaseWallet {
   ): Promise<TxRecord[]> {
     const detailed = await this.client.getDetailedHistory(address, limit);
 
-    return detailed.map((tx) => ({
-      txHash: tx.txHash,
-      chain: 'btc' as const,
-      from: tx.direction === 'received'
-        ? (tx.counterparties[0] ?? '')
-        : address,
-      to: tx.direction === 'sent'
-        ? (tx.counterparties[0] ?? '')
-        : address,
-      amount: String(Math.abs(tx.amount)),
-      fee: String(tx.fee),
-      direction: tx.direction,
-      timestamp: tx.timestamp,
-      status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
-      blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
-    }));
+    return detailed.map((tx) => {
+      // Deduplicate counterparties
+      const uniqueCounterparties = [...new Set(tx.counterparties)];
+      return {
+        txHash: tx.txHash,
+        chain: 'btc' as const,
+        // Primary from/to for backwards compat (first counterparty)
+        from: tx.direction === 'received'
+          ? (uniqueCounterparties[0] ?? '')
+          : address,
+        to: tx.direction === 'sent'
+          ? (uniqueCounterparties[0] ?? '')
+          : address,
+        amount: String(Math.abs(tx.amount)),
+        fee: String(tx.fee),
+        direction: tx.direction,
+        // Full counterparty list (deduplicated)
+        counterparties: uniqueCounterparties,
+        timestamp: tx.timestamp,
+        status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
+        blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
+      };
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -360,18 +367,8 @@ export class BitcoinWallet extends BaseWallet {
     blockTime: number;
     fee: number;
   }> {
-    if (typeof (this.client as any).getTxStatus === 'function') {
-      return (this.client as any).getTxStatus(txHash);
-    }
-    // Fallback: verify tx exists via getTransaction
-    const rawHex = await this.client.getTransaction(txHash);
-    return {
-      txHash,
-      confirmed: rawHex.length > 0,
-      blockHeight: 0,
-      blockTime: 0,
-      fee: 0,
-    };
+    // getTxStatus is now part of IBtcClient — no duck-typing needed
+    return this.client.getTxStatus(txHash);
   }
 
   // -----------------------------------------------------------------------

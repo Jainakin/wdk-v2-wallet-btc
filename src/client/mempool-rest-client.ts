@@ -15,7 +15,7 @@
 
 import type { IBtcClient } from './btc-client.js';
 import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo, BtcNetwork } from '../types.js';
-import { LRUCache } from '../cache.js';
+import { LRUCache, ConcurrencyLimiter } from '../cache.js';
 
 /** Default mempool.space base URLs per network */
 const BASE_URLS: Record<BtcNetwork, string> = {
@@ -28,6 +28,8 @@ export class MempoolRestClient implements IBtcClient {
   private readonly baseUrl: string;
   /** LRU cache for raw transaction hex (avoids re-fetching same tx) */
   private readonly txCache = new LRUCache<string, string>(100);
+  /** Concurrency limiter for parallel requests (matches production pLimit(8)) */
+  private readonly limiter = new ConcurrencyLimiter(8);
 
   constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
     this.baseUrl = customUrl
@@ -170,7 +172,7 @@ export class MempoolRestClient implements IBtcClient {
     const cached = this.txCache.get(txHash);
     if (cached !== undefined) return cached;
 
-    const hex = await this.fetchText(`/tx/${txHash}/hex`);
+    const hex = await this.limiter.run(() => this.fetchText(`/tx/${txHash}/hex`));
     this.txCache.set(txHash, hex);
     return hex;
   }

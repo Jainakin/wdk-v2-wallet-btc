@@ -17,7 +17,7 @@
 
 import type { IBtcClient } from './btc-client.js';
 import type { BtcBalance, ElectrumUnspent, ElectrumHistoryEntry, DetailedTxInfo, BtcNetwork } from '../types.js';
-import { LRUCache } from '../cache.js';
+import { LRUCache, ConcurrencyLimiter } from '../cache.js';
 
 /** Default Blockbook server URLs per network */
 const BASE_URLS: Record<BtcNetwork, string> = {
@@ -32,6 +32,7 @@ const MEMPOOL_FEE_URL = 'https://mempool.space/api/v1/fees/recommended';
 export class BlockbookClient implements IBtcClient {
   private readonly baseUrl: string;
   private readonly txCache = new LRUCache<string, string>(100);
+  private readonly limiter = new ConcurrencyLimiter(8);
 
   constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
     this.baseUrl = customUrl
@@ -47,6 +48,7 @@ export class BlockbookClient implements IBtcClient {
 
   async connect(): Promise<void> { /* no-op for HTTP REST */ }
   async close(): Promise<void> { this.txCache.clear(); }
+  async reconnect(): Promise<void> { this.txCache.clear(); }
   async reconnect(): Promise<void> { /* no-op */ }
 
   async getBalance(address: string): Promise<BtcBalance> {
@@ -126,6 +128,30 @@ export class BlockbookClient implements IBtcClient {
 
     this.txCache.set(txHash, data.hex);
     return data.hex;
+  }
+
+  async getTxStatus(txHash: string): Promise<{
+    txHash: string;
+    confirmed: boolean;
+    blockHeight: number;
+    blockTime: number;
+    fee: number;
+  }> {
+    const data = await this.fetchJson<{
+      txid: string;
+      confirmations: number;
+      blockHeight?: number;
+      blockTime?: number;
+      fees: string;
+    }>(`/api/v2/tx/${txHash}`);
+
+    return {
+      txHash: data.txid,
+      confirmed: data.confirmations > 0,
+      blockHeight: data.blockHeight ?? 0,
+      blockTime: data.blockTime ?? 0,
+      fee: parseInt(data.fees, 10) || 0,
+    };
   }
 
   async broadcast(rawTx: string): Promise<string> {

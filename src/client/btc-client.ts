@@ -45,4 +45,16 @@ export interface IBtcClient {
    * @returns fee rate in BTC/kB (production convention)
    */
   estimateFee(blocks: number): Promise<number>;
+
+  /**
+   * Get transaction confirmation status.
+   * Returns confirmed state, block height/time, and fee.
+   */
+  getTxStatus(txHash: string): Promise<{
+    txHash: string;
+    confirmed: boolean;
+    blockHeight: number;
+    blockTime: number;
+    fee: number;
+  }>;
 }
