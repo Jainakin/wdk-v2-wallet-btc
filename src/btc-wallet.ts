@@ -147,13 +147,14 @@ export class BitcoinWallet extends BaseWallet {
     outputCount: number;
     totalInput: number;
     change: number;
+    changeValue: number;   // production alias for 'change'
     error?: string;
   }> {
     const targetSats = parseInt(params.amount, 10);
     if (isNaN(targetSats) || targetSats <= 0) {
       return {
         feasible: false, fee: 0, feeRate: 0, inputCount: 0,
-        outputCount: 0, totalInput: 0, change: 0,
+        outputCount: 0, totalInput: 0, change: 0, changeValue: 0,
         error: `Invalid amount: ${params.amount}`,
       };
     }
@@ -172,7 +173,7 @@ export class BitcoinWallet extends BaseWallet {
       if (!selection) {
         return {
           feasible: false, fee: 0, feeRate, inputCount: 0,
-          outputCount: 0, totalInput: utxos.reduce((s, u) => s + u.value, 0), change: 0,
+          outputCount: 0, totalInput: utxos.reduce((s, u) => s + u.value, 0), change: 0, changeValue: 0,
           error: 'Insufficient funds',
         };
       }
@@ -190,7 +191,7 @@ export class BitcoinWallet extends BaseWallet {
     } catch (e: any) {
       return {
         feasible: false, fee: 0, feeRate: 0, inputCount: 0,
-        outputCount: 0, totalInput: 0, change: 0,
+        outputCount: 0, totalInput: 0, change: 0, changeValue: 0,
         error: e.message ?? String(e),
       };
     }
@@ -203,7 +204,9 @@ export class BitcoinWallet extends BaseWallet {
    */
   async getMaxSpendable(address: string): Promise<{
     maxSpendable: number;
+    amount: number;       // production alias for 'maxSpendable'
     fee: number;
+    changeValue: number;  // production field (always 0 for max-spend)
     utxoCount: number;
   }> {
     const electrumUtxos = await this.client.listUnspent(address);
@@ -220,8 +223,9 @@ export class BitcoinWallet extends BaseWallet {
 
     return {
       maxSpendable,
-      amount: maxSpendable, // production alias
+      amount: maxSpendable,     // production alias
       fee: totalInput - maxSpendable,
+      changeValue: 0,           // max-spend has no change
       utxoCount: utxos.length,
     };
   }
@@ -443,12 +447,35 @@ export class BitcoinWallet extends BaseWallet {
   async getTransactionReceipt(txHash: string): Promise<{
     txHash: string;
     confirmed: boolean;
+    confirmations: number;
     blockHeight: number;
     blockTime: number;
     fee: number;
-  }> {
-    // getTxStatus is now part of IBtcClient — no duck-typing needed
-    return this.client.getTxStatus(txHash);
+    rawTx?: string;       // optional: raw tx hex
+  } | null> {
+    try {
+      const status = await this.client.getTxStatus(txHash);
+      // Estimate confirmations from block height
+      // (would need current tip height for exact count — approximate with 0/1)
+      const confirmations = status.confirmed ? 1 : 0;
+
+      // Optionally fetch raw tx hex
+      let rawTx: string | undefined;
+      try {
+        rawTx = await this.client.getTransaction(txHash);
+      } catch {
+        // Raw tx fetch is optional — don't fail the receipt
+      }
+
+      return {
+        ...status,
+        confirmations,
+        rawTx,
+      };
+    } catch {
+      // Tx not found — production returns null
+      return null;
+    }
   }
 
   // -----------------------------------------------------------------------
