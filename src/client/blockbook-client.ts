@@ -181,8 +181,13 @@ export class BlockbookClient implements IBtcClient {
     return data.result ?? '';
   }
 
-  async getDetailedHistory(address: string, limit: number = 25): Promise<DetailedTxInfo[]> {
-    // Blockbook /api/v2/address/{addr}?details=txs returns full tx data
+  async getDetailedHistory(
+    address: string,
+    limit: number = 25,
+    _afterTxId?: string,
+    page: number = 1,
+  ): Promise<DetailedTxInfo[]> {
+    // Blockbook /api/v2/address/{addr}?details=txs supports page-based pagination
     const data = await this.fetchJson<{
       transactions?: Array<{
         txid: string;
@@ -193,7 +198,7 @@ export class BlockbookClient implements IBtcClient {
         vin: Array<{ addresses?: string[]; value: string }>;
         vout: Array<{ addresses?: string[]; value: string }>;
       }>;
-    }>(`/api/v2/address/${address}?details=txs&pageSize=${limit}`);
+    }>(`/api/v2/address/${address}?details=txs&pageSize=${limit}&page=${page}`);
 
     if (!data.transactions) return [];
 

@@ -26,7 +26,7 @@ import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH, MIN_TX_FEE_S
 import { buildTransaction, addressToScriptPubKey } from './transaction.js';
 import type { IBtcClient } from './client/btc-client.js';
 import { createClient, MempoolRestClient } from './client/index.js';
-import type { UTXO, BtcUnsignedTx, BtcNetwork } from './types.js';
+import type { UTXO, BtcUnsignedTx, BtcNetwork, TransferQuery, TransferResult } from './types.js';
 
 export class BitcoinWallet extends BaseWallet {
   private isTestnet: boolean = false;
@@ -379,6 +379,48 @@ export class BitcoinWallet extends BaseWallet {
         blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
       };
     });
+  }
+
+  // -----------------------------------------------------------------------
+  // Paginated transfers (production parity: getTransfers)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Get paginated, filterable transfer history.
+   * Matches production WDK's getTransfers({direction, limit, skip}).
+   *
+   * @param address  The Bitcoin address to query
+   * @param query    Optional: direction filter, limit, pagination cursor
+   * @returns transfers array + hasMore flag + nextCursor for pagination
+   */
+  async getTransfers(
+    address: string,
+    query?: TransferQuery,
+  ): Promise<TransferResult> {
+    const limit = query?.limit ?? 25;
+    const detailed = await this.client.getDetailedHistory(
+      address, limit, query?.afterTxId, query?.page,
+    );
+
+    // Apply direction filter
+    let filtered = detailed;
+    if (query?.direction && query.direction !== 'all') {
+      filtered = detailed.filter((tx) => tx.direction === query.direction);
+    }
+
+    // Deduplicate counterparties and map to TxRecord-compatible shape
+    const transfers = filtered.map((tx) => ({
+      ...tx,
+      counterparties: [...new Set(tx.counterparties)],
+    }));
+
+    // Determine pagination state
+    const hasMore = detailed.length >= limit;
+    const nextCursor = detailed.length > 0
+      ? detailed[detailed.length - 1].txHash
+      : undefined;
+
+    return { transfers, hasMore, nextCursor };
   }
 
   // -----------------------------------------------------------------------

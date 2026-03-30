@@ -86,15 +86,24 @@ export class MempoolRestClient implements IBtcClient {
     }));
   }
 
-  async getDetailedHistory(address: string, limit: number = 25): Promise<DetailedTxInfo[]> {
-    // Mempool /address/{addr}/txs returns full transaction objects
+  async getDetailedHistory(
+    address: string,
+    limit: number = 25,
+    afterTxId?: string,
+    _page?: number,
+  ): Promise<DetailedTxInfo[]> {
+    // Mempool.space pagination: /address/{addr}/txs/chain/{last_seen_txid}
+    const endpoint = afterTxId
+      ? `/address/${address}/txs/chain/${afterTxId}`
+      : `/address/${address}/txs`;
+
     const txs = await this.fetchJson<Array<{
       txid: string;
       fee: number;
       vin: Array<{ prevout: { scriptpubkey_address?: string; value: number } | null }>;
       vout: Array<{ scriptpubkey_address?: string; value: number }>;
       status: { confirmed: boolean; block_height?: number; block_time?: number };
-    }>>(`/address/${address}/txs`);
+    }>>(endpoint);
 
     return txs.slice(0, limit).map((tx) => {
       // Determine direction by checking if address appears in inputs/outputs

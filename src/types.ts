@@ -86,6 +86,27 @@ export interface DetailedTxInfo {
   counterparties: string[];
 }
 
+/** Query parameters for paginated transfer history */
+export interface TransferQuery {
+  /** Filter by direction: 'sent', 'received', or 'all' (default: 'all') */
+  direction?: 'sent' | 'received' | 'all';
+  /** Max number of results to return (default: 25) */
+  limit?: number;
+  /** Cursor for pagination — txid of the last seen tx (mempool.space chain pagination) */
+  afterTxId?: string;
+  /** Numeric page number (blockbook pagination) */
+  page?: number;
+}
+
+/** Paginated transfer result */
+export interface TransferResult {
+  transfers: DetailedTxInfo[];
+  /** True if there may be more results beyond this page */
+  hasMore: boolean;
+  /** Cursor for fetching the next page (last txid in this batch) */
+  nextCursor?: string;
+}
+
 /** Descriptor for creating a client via factory.
  * Production-compatible types: 'blockbook-http', 'electrum', 'electrum-ws'
  * v2 also accepts: 'blockbook' (alias), 'mempool-rest'
