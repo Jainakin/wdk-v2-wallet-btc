@@ -14,6 +14,9 @@ export interface BtcTxInput {
   vout: number;
   value: number;
   scriptPubKey: string;
+  address?: string;
+  /** Full previous transaction hex — required for P2PKH (nonWitnessUtxo) */
+  prevTxHex?: string;
 }
 
 /** Transaction output for building a BTC transaction */

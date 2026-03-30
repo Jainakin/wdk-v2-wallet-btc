@@ -289,12 +289,29 @@ export class BitcoinWallet extends BaseWallet {
     }
 
     // 4. Build the unsigned tx structure
-    const inputs = selection.selected.map((u) => ({
-      txid: u.txid,
-      vout: u.vout,
-      value: u.value,
-      scriptPubKey: u.scriptPubKey,
-    }));
+    // For P2PKH inputs, fetch the full previous transaction (nonWitnessUtxo)
+    const spkBytes = native.encoding.hexDecode(senderScriptPubKey);
+    const isLegacy = spkBytes.length === 25 && spkBytes[0] === 0x76;
+
+    const inputs = await Promise.all(
+      selection.selected.map(async (u) => {
+        const input: any = {
+          txid: u.txid,
+          vout: u.vout,
+          value: u.value,
+          scriptPubKey: u.scriptPubKey,
+          address: fromAddress,
+        };
+        if (isLegacy) {
+          try {
+            input.prevTxHex = await this.client.getTransaction(u.txid);
+          } catch {
+            // If we can't fetch prev tx, PSBT will fall back to witnessUtxo
+          }
+        }
+        return input;
+      })
+    );
 
     const outputs: { address: string; value: number }[] = [
       { address: to, value: targetSats },
@@ -455,9 +472,16 @@ export class BitcoinWallet extends BaseWallet {
   } | null> {
     try {
       const status = await this.client.getTxStatus(txHash);
-      // Estimate confirmations from block height
-      // (would need current tip height for exact count — approximate with 0/1)
-      const confirmations = status.confirmed ? 1 : 0;
+      // Calculate actual confirmation count from tip height
+      let confirmations = 0;
+      if (status.confirmed && status.blockHeight > 0) {
+        try {
+          const tipHeight = await this.client.getBlockHeight();
+          confirmations = tipHeight > 0 ? tipHeight - status.blockHeight + 1 : 1;
+        } catch {
+          confirmations = 1; // Fallback: at least 1 if confirmed
+        }
+      }
 
       // Optionally fetch raw tx hex
       let rawTx: string | undefined;

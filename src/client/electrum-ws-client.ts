@@ -57,6 +57,17 @@ export class ElectrumWsClient implements IBtcClient {
         if (handler) handler(status);
       },
     );
+
+    // Handle reconnect: re-subscribe all active scripthashes
+    this.transport.onNotification('_reconnect', async () => {
+      for (const [scripthash] of this.activeSubscriptions) {
+        try {
+          await this.transport.request('blockchain.scripthash.subscribe', [scripthash]);
+        } catch {
+          // Best effort re-subscribe
+        }
+      }
+    });
   }
 
   async close(): Promise<void> {
@@ -268,6 +279,18 @@ export class ElectrumWsClient implements IBtcClient {
     };
   }
 
+  async getBlockHeight(): Promise<number> {
+    try {
+      // Electrum: blockchain.headers.subscribe returns current tip
+      const result = await this.limiter.run(() =>
+        this.transport.request('blockchain.headers.subscribe', [])
+      ) as { height: number };
+      return result.height ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
   // ── Subscription support ────────────────────────────────────────────────
 
   /**
@@ -301,8 +324,14 @@ export class ElectrumWsClient implements IBtcClient {
   // ── Helpers ─────────────────────────────────────────────────────────────
 
   private async getBlockHeightForTx(txHash: string): Promise<number> {
-    // Get from history which includes height
-    // This is a simplification — production would track this differently
-    return 0;
+    try {
+      // Use verbose transaction.get which includes block info
+      const tx = await this.limiter.run(() =>
+        this.transport.request('blockchain.transaction.get', [txHash, true])
+      ) as { blockheight?: number; block_height?: number };
+      return tx.blockheight ?? tx.block_height ?? 0;
+    } catch {
+      return 0;
+    }
   }
 }

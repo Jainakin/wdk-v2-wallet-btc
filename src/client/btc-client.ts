@@ -57,4 +57,10 @@ export interface IBtcClient {
     blockTime: number;
     fee: number;
   }>;
+
+  /**
+   * Get the current blockchain tip height.
+   * Used for calculating confirmation count.
+   */
+  getBlockHeight(): Promise<number>;
 }

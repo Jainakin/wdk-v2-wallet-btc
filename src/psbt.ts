@@ -709,10 +709,13 @@ export function buildAndSignPsbt(
 
     // Determine input type from scriptPubKey
     if (spk.length === 25 && spk[0] === 0x76) {
-      // P2PKH: needs nonWitnessUtxo (full previous tx)
-      // For now, add witnessUtxo as fallback — full prev tx requires extra fetch
-      // TODO: fetch full prev tx from client for true P2PKH support
-      addWitnessUtxo(psbt, i, inputs[i].value, spk);
+      // P2PKH: needs nonWitnessUtxo (full previous transaction)
+      if (inputs[i].prevTxHex) {
+        addNonWitnessUtxo(psbt, i, native.encoding.hexDecode(inputs[i].prevTxHex!));
+      } else {
+        // Fallback: use witnessUtxo (less safe but functional for self-signed inputs)
+        addWitnessUtxo(psbt, i, inputs[i].value, spk);
+      }
     } else {
       // P2WPKH, P2WSH, P2TR: witnessUtxo is sufficient
       addWitnessUtxo(psbt, i, inputs[i].value, spk);

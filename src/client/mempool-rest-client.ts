@@ -264,6 +264,11 @@ export class MempoolRestClient implements IBtcClient {
     return (satPerVb * 1000) / 1e8;
   }
 
+  async getBlockHeight(): Promise<number> {
+    const text = await this.fetchText('/blocks/tip/height');
+    return parseInt(text, 10) || 0;
+  }
+
   // ── Private helpers ──────────────────────────────────────────────────────
 
   private async fetchJson<T>(path: string): Promise<T> {

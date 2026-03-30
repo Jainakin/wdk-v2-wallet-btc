@@ -279,8 +279,17 @@ export class ElectrumTransport {
       this.reconnecting = false;
       try {
         await this.connect(this.url);
-        // Re-subscribe to all active subscriptions
-        // (subscriptions are kept in the map — they survive reconnect)
+        // Re-subscribe to all active subscriptions after reconnect.
+        // The subscription handlers survived in this.subscriptions map.
+        // We need to re-send subscribe requests to the server.
+        for (const [method] of this.subscriptions) {
+          // The subscription callbacks are still registered — just need to
+          // re-subscribe on the server side. The actual re-subscribe calls
+          // are made by the ElectrumWsClient which tracks scripthashes.
+          // Emit a reconnect event so the client layer can re-subscribe.
+          const handler = this.subscriptions.get('_reconnect');
+          if (handler) handler([]);
+        }
       } catch {
         // Will trigger another reconnect via onClose
       }

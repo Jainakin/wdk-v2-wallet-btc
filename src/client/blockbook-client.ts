@@ -181,6 +181,13 @@ export class BlockbookClient implements IBtcClient {
     return data.result ?? '';
   }
 
+  async getBlockHeight(): Promise<number> {
+    const data = await this.fetchJson<{ blockbook?: { bestHeight?: number } }>(
+      '/api/v2'
+    );
+    return data.blockbook?.bestHeight ?? 0;
+  }
+
   async getDetailedHistory(
     address: string,
     limit: number = 25,
