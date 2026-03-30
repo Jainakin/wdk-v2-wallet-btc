@@ -598,21 +598,35 @@ export class BitcoinWallet extends BaseWallet {
       return false;
     }
 
-    // Derive address from recovered pubkey: Hash160 + bech32
+    // Derive address from recovered pubkey and compare.
+    // Must try both P2WPKH (bech32) and P2PKH (base58) to handle both address types.
     const sha = native.crypto.sha256(recoveredPubkey);
     const hash160 = native.crypto.ripemd160(sha);
 
-    // Convert to 5-bit groups for bech32
+    // Try P2WPKH (bech32) first
     const data5 = convertBits(hash160, 8, 5, true);
-    if (!data5) return false;
+    if (data5) {
+      const hrp = this.network === 'regtest' ? 'bcrt' : (this.isTestnet ? 'tb' : 'bc');
+      const witnessData = new Uint8Array(1 + data5.length);
+      witnessData[0] = 0; // witness version 0
+      witnessData.set(data5, 1);
+      const segwitAddr = native.encoding.bech32Encode(hrp, witnessData);
+      if (segwitAddr === address) return true;
+    }
 
-    const hrp = this.network === 'regtest' ? 'bcrt' : (this.isTestnet ? 'tb' : 'bc');
-    const witnessData = new Uint8Array(1 + data5.length);
-    witnessData[0] = 0; // witness version 0
-    witnessData.set(data5, 1);
+    // Try P2PKH (base58check)
+    const version = this.isTestnet ? 0x6f : 0x00;
+    const payload = new Uint8Array(21);
+    payload[0] = version;
+    payload.set(hash160, 1);
+    try {
+      const legacyAddr = native.encoding.base58CheckEncode(payload);
+      if (legacyAddr === address) return true;
+    } catch {
+      // base58check encode failed — not a valid P2PKH match
+    }
 
-    const derivedAddress = native.encoding.bech32Encode(hrp, witnessData);
-    return derivedAddress === address;
+    return false;
   }
 
   // ── Bitcoin Signed Message helpers ──
