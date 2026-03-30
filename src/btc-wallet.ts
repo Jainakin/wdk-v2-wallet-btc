@@ -21,7 +21,7 @@ import type {
   SignedTx,
   TxRecord,
 } from '@aspect/wdk-v2-utils';
-import { generateSegwitAddress } from './address.js';
+import { generateSegwitAddress, convertBits } from './address.js';
 import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH, MIN_TX_FEE_SATS } from './utxo.js';
 import { buildTransaction, addressToScriptPubKey } from './transaction.js';
 import type { IBtcClient } from './client/btc-client.js';
@@ -398,6 +398,174 @@ export class BitcoinWallet extends BaseWallet {
   }> {
     // getTxStatus is now part of IBtcClient — no duck-typing needed
     return this.client.getTxStatus(txHash);
+  }
+
+  // -----------------------------------------------------------------------
+  // Message signing (Bitcoin Signed Message format)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Sign a message using the Bitcoin Signed Message standard.
+   * Compatible with bitcoinjs-message / Electrum / Bitcoin Core signmessage.
+   *
+   * Format: double-SHA256 of "\x18Bitcoin Signed Message:\n" + varint(len) + message
+   * Output: base64-encoded 65-byte signature (1 flag byte + 32r + 32s)
+   *
+   * @param message    The message string to sign
+   * @param keyHandle  Key handle for the signing key
+   * @returns base64-encoded signature string
+   */
+  async signMessage(message: string, keyHandle: KeyHandle): Promise<string> {
+    const msgHash = this.bitcoinMessageHash(message);
+    // Sign with recoverable signature → 65 bytes (64 compact + 1 recid)
+    const recoverableSig = native.crypto.signRecoverableSecp256k1(keyHandle, msgHash);
+    const recid = recoverableSig[64];
+
+    // Flag byte: 27 (magic) + 4 (compressed pubkey) + recid
+    const flagByte = 27 + 4 + recid;
+
+    // Output: [flagByte, r(32), s(32)]
+    const result = new Uint8Array(65);
+    result[0] = flagByte;
+    result.set(recoverableSig.slice(0, 64), 1);
+
+    // Base64 encode
+    return this.uint8ArrayToBase64(result);
+  }
+
+  /**
+   * Verify a Bitcoin Signed Message against an address.
+   * Recovers the public key from the signature, derives the address,
+   * and compares to the expected address.
+   *
+   * @param message    The original message string
+   * @param signature  base64-encoded 65-byte signature
+   * @param address    The expected Bitcoin address
+   * @returns true if the signature is valid for this address
+   */
+  async verifyMessage(message: string, signature: string, address: string): Promise<boolean> {
+    const sigBytes = this.base64ToUint8Array(signature);
+    if (sigBytes.length !== 65) return false;
+
+    const flagByte = sigBytes[0];
+    // Extract recid from flag: recid = (flagByte - 27) & 3
+    const recid = (flagByte - 27) & 3;
+    // Check compressed flag: (flagByte - 27) & 4
+    const compressed = ((flagByte - 27) & 4) !== 0;
+    if (!compressed) return false; // We only support compressed keys
+
+    // Reconstruct 65-byte recoverable signature (64 compact + 1 recid)
+    const recoverableSig = new Uint8Array(65);
+    recoverableSig.set(sigBytes.slice(1, 65), 0);
+    recoverableSig[64] = recid;
+
+    const msgHash = this.bitcoinMessageHash(message);
+
+    // Recover public key
+    let recoveredPubkey: Uint8Array;
+    try {
+      recoveredPubkey = native.crypto.recoverSecp256k1(msgHash, recoverableSig);
+    } catch {
+      return false;
+    }
+
+    // Derive address from recovered pubkey: Hash160 + bech32
+    const sha = native.crypto.sha256(recoveredPubkey);
+    const hash160 = native.crypto.ripemd160(sha);
+
+    // Convert to 5-bit groups for bech32
+    const data5 = convertBits(hash160, 8, 5, true);
+    if (!data5) return false;
+
+    const hrp = this.network === 'regtest' ? 'bcrt' : (this.isTestnet ? 'tb' : 'bc');
+    const witnessData = new Uint8Array(1 + data5.length);
+    witnessData[0] = 0; // witness version 0
+    witnessData.set(data5, 1);
+
+    const derivedAddress = native.encoding.bech32Encode(hrp, witnessData);
+    return derivedAddress === address;
+  }
+
+  // ── Bitcoin Signed Message helpers ──
+
+  private bitcoinMessageHash(message: string): Uint8Array {
+    // Construct: "\x18Bitcoin Signed Message:\n" + varint(len) + message
+    const prefix = new Uint8Array([
+      0x18, // length of "Bitcoin Signed Message:\n"
+      0x42, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x20, // "Bitcoin "
+      0x53, 0x69, 0x67, 0x6e, 0x65, 0x64, 0x20,       // "Signed "
+      0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x3a,  // "Message:"
+      0x0a,                                              // "\n"
+    ]);
+
+    const msgBytes = native.encoding.utf8Encode(message);
+    const varint = this.encodeVarint(msgBytes.length);
+
+    // Concatenate: prefix + varint + msgBytes
+    const payload = new Uint8Array(prefix.length + varint.length + msgBytes.length);
+    payload.set(prefix, 0);
+    payload.set(varint, prefix.length);
+    payload.set(msgBytes, prefix.length + varint.length);
+
+    // Double SHA256
+    return native.crypto.sha256(native.crypto.sha256(payload));
+  }
+
+  private encodeVarint(n: number): Uint8Array {
+    if (n < 0xfd) return new Uint8Array([n]);
+    if (n <= 0xffff) {
+      const buf = new Uint8Array(3);
+      buf[0] = 0xfd;
+      buf[1] = n & 0xff;
+      buf[2] = (n >> 8) & 0xff;
+      return buf;
+    }
+    const buf = new Uint8Array(5);
+    buf[0] = 0xfe;
+    buf[1] = n & 0xff;
+    buf[2] = (n >> 8) & 0xff;
+    buf[3] = (n >> 16) & 0xff;
+    buf[4] = (n >> 24) & 0xff;
+    return buf;
+  }
+
+  private uint8ArrayToBase64(data: Uint8Array): string {
+    // QuickJS doesn't have btoa — manual base64 encoding
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let result = '';
+    for (let i = 0; i < data.length; i += 3) {
+      const a = data[i];
+      const b = i + 1 < data.length ? data[i + 1] : 0;
+      const c = i + 2 < data.length ? data[i + 2] : 0;
+      result += chars[(a >> 2) & 0x3f];
+      result += chars[((a << 4) | (b >> 4)) & 0x3f];
+      result += i + 1 < data.length ? chars[((b << 2) | (c >> 6)) & 0x3f] : '=';
+      result += i + 2 < data.length ? chars[c & 0x3f] : '=';
+    }
+    return result;
+  }
+
+  private base64ToUint8Array(base64: string): Uint8Array {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const lookup = new Map<string, number>();
+    for (let i = 0; i < chars.length; i++) lookup.set(chars[i], i);
+
+    // Remove padding and calculate output length
+    const clean = base64.replace(/=/g, '');
+    const outLen = Math.floor((clean.length * 3) / 4);
+    const result = new Uint8Array(outLen);
+
+    let j = 0;
+    for (let i = 0; i < clean.length; i += 4) {
+      const a = lookup.get(clean[i]) ?? 0;
+      const b = lookup.get(clean[i + 1]) ?? 0;
+      const c = lookup.get(clean[i + 2]) ?? 0;
+      const d = lookup.get(clean[i + 3]) ?? 0;
+      result[j++] = (a << 2) | (b >> 4);
+      if (j < outLen) result[j++] = ((b << 4) | (c >> 2)) & 0xff;
+      if (j < outLen) result[j++] = ((c << 6) | d) & 0xff;
+    }
+    return result;
   }
 
   // -----------------------------------------------------------------------

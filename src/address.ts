@@ -13,7 +13,7 @@
  * zero-padded on the right; when false, a partial trailing group
  * that would lose data causes a null return.
  */
-function convertBits(
+export function convertBits(
   data: Uint8Array,
   fromBits: number,
   toBits: number,
