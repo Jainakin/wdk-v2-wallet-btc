@@ -58,7 +58,9 @@ export class BtcAccount extends WalletAccount {
 
   async getBalance(): Promise<string> {
     const balance = await this.client.getBalance(this.address);
-    return String(balance.confirmed);
+    // Return mempool-aware balance: confirmed + unconfirmed
+    // This reflects pending spends/receives before they're mined.
+    return String(balance.confirmed + balance.unconfirmed);
   }
 
   async getFeeRates(): Promise<{
