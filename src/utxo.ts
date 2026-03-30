@@ -1,11 +1,12 @@
 /**
  * UTXO coin selection for Bitcoin transactions.
  *
- * Matches production tetherto/wdk-wallet-btc patterns:
- *   - BIP-aware dust thresholds (546 for P2PKH/BIP44, 294 for P2WPKH/BIP84)
- *   - MAX_UTXO_INPUTS limit (200) to bound transaction size
- *   - MIN_TX_FEE_SATS floor (250) to ensure relay acceptance
- *   - Largest-first coin selection (accumulative strategy)
+ * Production-parity two-phase algorithm (matches @bitcoinerlab/coinselect):
+ *   Phase 1 — avoidChange: try to find exact-ish match (no change output)
+ *   Phase 2 — addUntilReach: accumulative largest-first with change
+ *
+ * Also: BIP-aware dust thresholds, MAX_UTXO_INPUTS, MIN_TX_FEE_SATS,
+ *        address-aware output size estimation.
  */
 
 import type { UTXO } from './types.js';
@@ -22,21 +23,12 @@ const TX_OVERHEAD_VBYTES = 11;
 /**
  * Estimate output size in vbytes based on destination address format.
  * Output = 8 (value) + 1 (varint) + scriptPubKey length
- *
- * | Type     | scriptPubKey | Total vbytes |
- * |----------|-------------|--------------|
- * | P2WPKH   | 22 bytes    | 31           |
- * | P2SH     | 23 bytes    | 32           |
- * | P2PKH    | 25 bytes    | 34           |
- * | P2WSH    | 34 bytes    | 43           |
- * | P2TR     | 34 bytes    | 43           |
  */
 function estimateOutputVbytes(address?: string): number {
   if (!address) return VBYTES_PER_OUTPUT_DEFAULT;
   if (address.startsWith('1') || address.startsWith('m') || address.startsWith('n')) return 34; // P2PKH
   if (address.startsWith('3') || address.startsWith('2')) return 32; // P2SH
   if (address.startsWith('bc1p') || address.startsWith('tb1p') || address.startsWith('bcrt1p')) return 43; // P2TR
-  // bc1q with 32-byte program = P2WSH (62 char), 20-byte = P2WPKH (42 char)
   if (address.length > 50) return 43; // P2WSH
   return VBYTES_PER_OUTPUT_DEFAULT; // P2WPKH (default)
 }
@@ -48,15 +40,13 @@ export const DUST_THRESHOLD_P2WPKH = 294;
 
 /**
  * Minimum transaction fee in satoshis.
- * Even at 1 sat/vB, a standard 1-input-2-output P2WPKH tx is ~141 vbytes.
- * This floor prevents sub-relay-minimum-fee transactions from being rejected.
+ * Matches production MIN_TX_FEE_SATS = 141 (min 1-in-1-out P2WPKH at 1 sat/vB).
  */
 export const MIN_TX_FEE_SATS = 141;
 
 /**
  * Maximum number of UTXO inputs per transaction.
- * Bounds transaction size and prevents overly large transactions that
- * peers may reject. Matches production MAX_UTXO_INPUTS.
+ * Matches production MAX_UTXO_INPUTS.
  */
 export const MAX_UTXO_INPUTS = 200;
 
@@ -68,116 +58,132 @@ export interface CoinSelection {
   change: number;
 }
 
-// ── Coin selection ───────────────────────────────────────────────────────────
+// ── Main selector ────────────────────────────────────────────────────────────
 
 /**
- * Select UTXOs using a "largest first" (accumulative) strategy.
+ * Select UTXOs using production-parity two-phase algorithm.
  *
- * Picks UTXOs from largest to smallest until the accumulated value
- * covers the target amount plus the estimated fee. The fee is
- * re-calculated after each UTXO is added because the transaction
- * size grows with each input.
+ * Phase 1 — avoidChange (inspired by @bitcoinerlab/coinselect "blackjack"):
+ *   Try to find a subset whose total covers target + fee for a 1-output tx.
+ *   The remainder (overpayment as extra fee) must be less than the cost of
+ *   adding a change output, otherwise it's wasteful.
  *
- * @param utxos         Available unspent outputs
- * @param targetAmount  Destination amount in satoshis
- * @param feeRate       Fee rate in sat/vbyte
- * @param dustThreshold Dust threshold (default: P2WPKH = 294)
- * @returns Selected UTXOs, fee, and change amount — or null if insufficient funds
+ * Phase 2 — addUntilReach (accumulative, largest-first):
+ *   Greedily add UTXOs until target + fee (2-output tx) is covered.
+ *   Sub-dust change absorbed into fee.
  */
 export function selectUtxos(
   utxos: UTXO[],
   targetAmount: number,
   feeRate: number,
   dustThreshold: number = DUST_THRESHOLD_P2WPKH,
-  destinationAddress?: string,
+  destinationAddr?: string,
 ): CoinSelection | null {
-  // Sort descending by value (largest first)
   const sorted = [...utxos].sort((a, b) => b.value - a.value);
-
-  // Enforce MAX_UTXO_INPUTS
   const candidates = sorted.slice(0, MAX_UTXO_INPUTS);
 
+  const destOutputVbytes = estimateOutputVbytes(destinationAddr);
+  const changeOutputVbytes = VBYTES_PER_OUTPUT_DEFAULT;
+
+  // Phase 1: avoidChange
+  const changeCost = Math.ceil(changeOutputVbytes * feeRate);
+  const avoidResult = avoidChange(candidates, targetAmount, feeRate, destOutputVbytes, changeCost);
+  if (avoidResult) return avoidResult;
+
+  // Phase 2: addUntilReach
+  return addUntilReach(candidates, targetAmount, feeRate, dustThreshold, destOutputVbytes, changeOutputVbytes);
+}
+
+/**
+ * Phase 1: Try to find a no-change selection.
+ * Iterates sorted UTXOs, accumulating. If total covers target + fee (1 output)
+ * and the remainder is less than changeCost, use this solution.
+ */
+function avoidChange(
+  sorted: UTXO[],
+  targetAmount: number,
+  feeRate: number,
+  destOutputVbytes: number,
+  changeCost: number,
+): CoinSelection | null {
   const selected: UTXO[] = [];
   let totalInput = 0;
 
-  // Destination output size depends on address type
-  const destOutputVbytes = estimateOutputVbytes(destinationAddress);
-  // Change output is always P2WPKH (our own address)
-  const changeOutputVbytes = VBYTES_PER_OUTPUT_DEFAULT;
-
-  for (const utxo of candidates) {
+  for (const utxo of sorted) {
     selected.push(utxo);
     totalInput += utxo.value;
 
-    // Estimate with 2 outputs (destination + change)
-    const vbytes2 =
-      TX_OVERHEAD_VBYTES +
-      selected.length * VBYTES_PER_INPUT +
-      destOutputVbytes + changeOutputVbytes;
-    let fee = Math.ceil(vbytes2 * feeRate);
+    const vbytes = TX_OVERHEAD_VBYTES + selected.length * VBYTES_PER_INPUT + destOutputVbytes;
+    let fee = Math.ceil(vbytes * feeRate);
+    if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;
 
-    // Enforce minimum fee floor
-    if (fee < MIN_TX_FEE_SATS) {
-      fee = MIN_TX_FEE_SATS;
+    if (totalInput >= targetAmount + fee) {
+      const remainder = totalInput - targetAmount - fee;
+      if (remainder < changeCost) {
+        return { selected: [...selected], fee: fee + remainder, change: 0 };
+      }
     }
+  }
+  return null;
+}
+
+/**
+ * Phase 2: Accumulative with change output.
+ */
+function addUntilReach(
+  sorted: UTXO[],
+  targetAmount: number,
+  feeRate: number,
+  dustThreshold: number,
+  destOutputVbytes: number,
+  changeOutputVbytes: number,
+): CoinSelection | null {
+  const selected: UTXO[] = [];
+  let totalInput = 0;
+
+  for (const utxo of sorted) {
+    selected.push(utxo);
+    totalInput += utxo.value;
+
+    const vbytes = TX_OVERHEAD_VBYTES + selected.length * VBYTES_PER_INPUT + destOutputVbytes + changeOutputVbytes;
+    let fee = Math.ceil(vbytes * feeRate);
+    if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;
 
     if (totalInput >= targetAmount + fee) {
       const change = totalInput - targetAmount - fee;
-
-      // If change is sub-dust, absorb it into the miner fee
-      // rather than creating an uneconomical output
       if (change > 0 && change < dustThreshold) {
-        const totalFee = totalInput - targetAmount;
-        return { selected, fee: totalFee, change: 0 };
+        return { selected: [...selected], fee: totalInput - targetAmount, change: 0 };
       }
-
-      return { selected, fee, change };
+      return { selected: [...selected], fee, change };
     }
   }
-
-  return null; // Insufficient funds
+  return null;
 }
 
 // ── Fee estimation helpers ───────────────────────────────────────────────────
 
 /**
  * Estimate the virtual size (vbytes) of a transaction.
- * Used for post-sign fee rebalancing (#32).
  */
 export function estimateVbytes(numInputs: number, numOutputs: number): number {
-  return TX_OVERHEAD_VBYTES +
-    numInputs * VBYTES_PER_INPUT +
-    numOutputs * VBYTES_PER_OUTPUT_DEFAULT;
+  return TX_OVERHEAD_VBYTES + numInputs * VBYTES_PER_INPUT + numOutputs * VBYTES_PER_OUTPUT_DEFAULT;
 }
 
 /**
  * Calculate the maximum spendable amount given UTXOs and fee rate.
- * Accounts for fee, dust threshold, and MAX_UTXO_INPUTS.
  */
 export function calculateMaxSpendable(
   utxos: UTXO[],
   feeRate: number,
   dustThreshold: number = DUST_THRESHOLD_P2WPKH,
 ): number {
-  // Sort descending, limit to MAX_UTXO_INPUTS
   const sorted = [...utxos].sort((a, b) => b.value - a.value);
   const candidates = sorted.slice(0, MAX_UTXO_INPUTS);
-
   const totalInput = candidates.reduce((sum, u) => sum + u.value, 0);
-
-  // No change output when sending max (1 output only)
-  const vbytes =
-    TX_OVERHEAD_VBYTES +
-    candidates.length * VBYTES_PER_INPUT +
-    1 * VBYTES_PER_OUTPUT_DEFAULT;
-
+  const vbytes = TX_OVERHEAD_VBYTES + candidates.length * VBYTES_PER_INPUT + 1 * VBYTES_PER_OUTPUT_DEFAULT;
   let fee = Math.ceil(vbytes * feeRate);
   if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;
-
   const maxSpendable = totalInput - fee;
-
-  // If max spendable is below dust, nothing can be sent
   if (maxSpendable < dustThreshold) return 0;
-
   return maxSpendable;
 }
