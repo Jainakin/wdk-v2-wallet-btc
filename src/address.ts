@@ -110,10 +110,11 @@ export function deriveAddress(
   account: number,
   index: number,
   isTestnet: boolean,
+  network?: string,
 ): { keyHandle: number; address: string } {
   const coinType = isTestnet ? 1 : 0;
   const path = `m/84'/${coinType}'/${account}'/0/${index}`;
   const keyHandle = native.crypto.deriveKey(seedHandle, path);
-  const address = generateSegwitAddress(keyHandle, isTestnet);
+  const address = generateSegwitAddress(keyHandle, isTestnet, network);
   return { keyHandle, address };
 }

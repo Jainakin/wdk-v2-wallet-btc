@@ -21,7 +21,7 @@ import { LRUCache, ConcurrencyLimiter } from '../cache.js';
 const BASE_URLS: Record<BtcNetwork, string> = {
   bitcoin: 'https://mempool.space/api',
   testnet: 'https://mempool.space/testnet4/api',
-  regtest: 'https://mempool.space/api', // regtest needs user-provided URL
+  regtest: '', // regtest MUST use a user-provided URL
 };
 
 export class MempoolRestClient implements IBtcClient {
@@ -32,6 +32,9 @@ export class MempoolRestClient implements IBtcClient {
   private readonly limiter = new ConcurrencyLimiter(8);
 
   constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
+    if (network === 'regtest' && !customUrl) {
+      throw new Error('MempoolRestClient: regtest requires a custom URL (e.g. http://localhost:3000/api)');
+    }
     this.baseUrl = customUrl
       ? customUrl.replace(/\/$/, '')
       : BASE_URLS[network];
