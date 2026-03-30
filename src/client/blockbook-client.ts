@@ -63,7 +63,6 @@ export class BlockbookClient implements IBtcClient {
   async connect(): Promise<void> { /* no-op for HTTP REST */ }
   async close(): Promise<void> { this.txCache.clear(); }
   async reconnect(): Promise<void> { this.txCache.clear(); }
-  async reconnect(): Promise<void> { /* no-op */ }
 
   async getBalance(address: string): Promise<BtcBalance> {
     const data = await this.fetchJson<{
