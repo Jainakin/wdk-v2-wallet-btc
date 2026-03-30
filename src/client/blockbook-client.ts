@@ -34,10 +34,24 @@ export class BlockbookClient implements IBtcClient {
   private readonly txCache = new LRUCache<string, string>(100);
   private readonly limiter = new ConcurrencyLimiter(8);
 
-  constructor(network: BtcNetwork = 'bitcoin', customUrl?: string) {
-    this.baseUrl = customUrl
-      ? customUrl.replace(/\/$/, '')
-      : BASE_URLS[network];
+  /**
+   * Constructor accepts two forms for production compatibility:
+   *   new BlockbookClient('testnet')              — use default URL
+   *   new BlockbookClient('bitcoin', 'https://...') — custom URL
+   *   new BlockbookClient({ url: 'https://...' }) — production config shape
+   */
+  constructor(networkOrConfig: BtcNetwork | { url: string; network?: BtcNetwork } = 'bitcoin', customUrl?: string) {
+    let network: BtcNetwork;
+    if (typeof networkOrConfig === 'object') {
+      // Production config shape: { url, network? }
+      network = networkOrConfig.network ?? 'bitcoin';
+      this.baseUrl = networkOrConfig.url.replace(/\/$/, '');
+    } else {
+      network = networkOrConfig;
+      this.baseUrl = customUrl
+        ? customUrl.replace(/\/$/, '')
+        : BASE_URLS[network];
+    }
 
     if (!this.baseUrl) {
       throw new Error(

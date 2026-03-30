@@ -14,10 +14,32 @@ import type { UTXO } from './types.js';
 
 /** Estimated vbytes per P2WPKH input (witness-discounted) */
 const VBYTES_PER_INPUT = 68;
-/** Estimated vbytes per output */
-const VBYTES_PER_OUTPUT = 31;
+/** Default estimated vbytes per output (P2WPKH — our change output) */
+const VBYTES_PER_OUTPUT_DEFAULT = 31;
 /** Fixed transaction overhead in vbytes (version + locktime + segwit marker) */
 const TX_OVERHEAD_VBYTES = 11;
+
+/**
+ * Estimate output size in vbytes based on destination address format.
+ * Output = 8 (value) + 1 (varint) + scriptPubKey length
+ *
+ * | Type     | scriptPubKey | Total vbytes |
+ * |----------|-------------|--------------|
+ * | P2WPKH   | 22 bytes    | 31           |
+ * | P2SH     | 23 bytes    | 32           |
+ * | P2PKH    | 25 bytes    | 34           |
+ * | P2WSH    | 34 bytes    | 43           |
+ * | P2TR     | 34 bytes    | 43           |
+ */
+function estimateOutputVbytes(address?: string): number {
+  if (!address) return VBYTES_PER_OUTPUT_DEFAULT;
+  if (address.startsWith('1') || address.startsWith('m') || address.startsWith('n')) return 34; // P2PKH
+  if (address.startsWith('3') || address.startsWith('2')) return 32; // P2SH
+  if (address.startsWith('bc1p') || address.startsWith('tb1p') || address.startsWith('bcrt1p')) return 43; // P2TR
+  // bc1q with 32-byte program = P2WSH (62 char), 20-byte = P2WPKH (42 char)
+  if (address.length > 50) return 43; // P2WSH
+  return VBYTES_PER_OUTPUT_DEFAULT; // P2WPKH (default)
+}
 
 /** Dust threshold for P2PKH outputs (BIP44 legacy) — 546 sats */
 export const DUST_THRESHOLD_P2PKH = 546;
@@ -29,7 +51,7 @@ export const DUST_THRESHOLD_P2WPKH = 294;
  * Even at 1 sat/vB, a standard 1-input-2-output P2WPKH tx is ~141 vbytes.
  * This floor prevents sub-relay-minimum-fee transactions from being rejected.
  */
-export const MIN_TX_FEE_SATS = 250;
+export const MIN_TX_FEE_SATS = 141;
 
 /**
  * Maximum number of UTXO inputs per transaction.
@@ -67,6 +89,7 @@ export function selectUtxos(
   targetAmount: number,
   feeRate: number,
   dustThreshold: number = DUST_THRESHOLD_P2WPKH,
+  destinationAddress?: string,
 ): CoinSelection | null {
   // Sort descending by value (largest first)
   const sorted = [...utxos].sort((a, b) => b.value - a.value);
@@ -77,6 +100,11 @@ export function selectUtxos(
   const selected: UTXO[] = [];
   let totalInput = 0;
 
+  // Destination output size depends on address type
+  const destOutputVbytes = estimateOutputVbytes(destinationAddress);
+  // Change output is always P2WPKH (our own address)
+  const changeOutputVbytes = VBYTES_PER_OUTPUT_DEFAULT;
+
   for (const utxo of candidates) {
     selected.push(utxo);
     totalInput += utxo.value;
@@ -85,7 +113,7 @@ export function selectUtxos(
     const vbytes2 =
       TX_OVERHEAD_VBYTES +
       selected.length * VBYTES_PER_INPUT +
-      2 * VBYTES_PER_OUTPUT;
+      destOutputVbytes + changeOutputVbytes;
     let fee = Math.ceil(vbytes2 * feeRate);
 
     // Enforce minimum fee floor
@@ -119,7 +147,7 @@ export function selectUtxos(
 export function estimateVbytes(numInputs: number, numOutputs: number): number {
   return TX_OVERHEAD_VBYTES +
     numInputs * VBYTES_PER_INPUT +
-    numOutputs * VBYTES_PER_OUTPUT;
+    numOutputs * VBYTES_PER_OUTPUT_DEFAULT;
 }
 
 /**
@@ -141,7 +169,7 @@ export function calculateMaxSpendable(
   const vbytes =
     TX_OVERHEAD_VBYTES +
     candidates.length * VBYTES_PER_INPUT +
-    1 * VBYTES_PER_OUTPUT;
+    1 * VBYTES_PER_OUTPUT_DEFAULT;
 
   let fee = Math.ceil(vbytes * feeRate);
   if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;

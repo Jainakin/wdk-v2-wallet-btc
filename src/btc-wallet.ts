@@ -93,6 +93,33 @@ export class BitcoinWallet extends BaseWallet {
   }
 
   // -----------------------------------------------------------------------
+  // Fee rates
+  // -----------------------------------------------------------------------
+
+  /**
+   * Get current fee rates in sat/vB for different priority levels.
+   * Matches production WDK's fee rate exposure.
+   */
+  async getFeeRates(): Promise<{
+    fast: number;    // ~1 block target
+    medium: number;  // ~3 block target
+    slow: number;    // ~6 block target
+  }> {
+    const [fast, medium, slow] = await Promise.all([
+      this.client.estimateFee(1),
+      this.client.estimateFee(3),
+      this.client.estimateFee(6),
+    ]);
+    // Convert BTC/kB → sat/vB
+    const toSatVb = (btcPerKb: number) => Math.ceil((btcPerKb * 1e8) / 1000);
+    return {
+      fast: toSatVb(fast),
+      medium: toSatVb(medium),
+      slow: toSatVb(slow),
+    };
+  }
+
+  // -----------------------------------------------------------------------
   // Quote + Max Spendable (production parity: quoteSendTransaction, getMaxSpendable)
   // -----------------------------------------------------------------------
 
@@ -134,7 +161,7 @@ export class BitcoinWallet extends BaseWallet {
       const btcPerKb = await this.client.estimateFee(3);
       const feeRate = Math.ceil((btcPerKb * 1e8) / 1000);
 
-      const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH);
+      const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH, params.to);
       if (!selection) {
         return {
           feasible: false, fee: 0, feeRate, inputCount: 0,
@@ -151,6 +178,7 @@ export class BitcoinWallet extends BaseWallet {
         outputCount: selection.change > 0 ? 2 : 1,
         totalInput: selection.selected.reduce((s, u) => s + u.value, 0),
         change: selection.change,
+        changeValue: selection.change, // production alias
       };
     } catch (e: any) {
       return {
@@ -185,6 +213,7 @@ export class BitcoinWallet extends BaseWallet {
 
     return {
       maxSpendable,
+      amount: maxSpendable, // production alias
       fee: totalInput - maxSpendable,
       utxoCount: utxos.length,
     };
@@ -243,7 +272,7 @@ export class BitcoinWallet extends BaseWallet {
     const feeRate = Math.ceil((btcPerKb * 1e8) / 1000);
 
     // 3. Coin selection
-    const selection = selectUtxos(utxos, targetSats, feeRate);
+    const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH, to);
     if (!selection) {
       throw new Error('Insufficient funds');
     }
