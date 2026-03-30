@@ -111,7 +111,7 @@ export class BitcoinWallet extends BaseWallet {
    */
   async getBalance(address: string): Promise<string> {
     const balance = await this.client.getBalance(address);
-    return String(balance.confirmed);
+    return String(balance.confirmed + balance.unconfirmed);
   }
 
   // -----------------------------------------------------------------------

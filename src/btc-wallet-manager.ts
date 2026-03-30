@@ -44,8 +44,8 @@ export class BtcWalletManager extends WalletManager {
     this.coinType = this.network_ === 'bitcoin' ? 0 : 1;
 
     // Create or accept the chain data client
-    if ((config as any).btcClient) {
-      this.client_ = createClient((config as any).btcClient, this.network_);
+    if (config.btcClient) {
+      this.client_ = createClient(config.btcClient, this.network_);
       await this.client_.connect();
     } else {
       // Try Electrum WebSocket first (production default)
