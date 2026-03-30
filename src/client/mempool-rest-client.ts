@@ -184,7 +184,7 @@ export class MempoolRestClient implements IBtcClient {
     const cached = this.txCache.get(txHash);
     if (cached !== undefined) return cached;
 
-    const hex = await this.limiter.run(() => this.fetchText(`/tx/${txHash}/hex`));
+    const hex = await this.fetchText(`/tx/${txHash}/hex`);
     this.txCache.set(txHash, hex);
     return hex;
   }
@@ -267,7 +267,7 @@ export class MempoolRestClient implements IBtcClient {
   // ── Private helpers ──────────────────────────────────────────────────────
 
   private async fetchJson<T>(path: string): Promise<T> {
-    const response = await native.net.fetch(`${this.baseUrl}${path}`);
+    const response = await this.limiter.run(() => native.net.fetch(`${this.baseUrl}${path}`));
 
     if (response.status !== 200) {
       const body = response.body
@@ -285,7 +285,7 @@ export class MempoolRestClient implements IBtcClient {
   }
 
   private async fetchText(path: string): Promise<string> {
-    const response = await native.net.fetch(`${this.baseUrl}${path}`);
+    const response = await this.limiter.run(() => native.net.fetch(`${this.baseUrl}${path}`));
 
     if (response.status !== 200) {
       const body = response.body

@@ -328,7 +328,7 @@ export class BlockbookClient implements IBtcClient {
   }
 
   private async fetchJson<T>(path: string): Promise<T> {
-    const response = await native.net.fetch(`${this.baseUrl}${path}`);
+    const response = await this.limiter.run(() => native.net.fetch(`${this.baseUrl}${path}`));
 
     if (response.status !== 200) {
       const body = response.body
