@@ -1,4 +1,7 @@
 export { BitcoinWallet } from './btc-wallet.js';
+export { BtcWalletManager } from './btc-wallet-manager.js';
+export { BtcAccount } from './btc-account.js';
+export { BtcAccountReadOnly } from './btc-account-read-only.js';
 export * from './types.js';
 export { generateSegwitAddress, deriveAddress } from './address.js';
 export { selectUtxos } from './utxo.js';
