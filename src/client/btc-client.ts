@@ -63,4 +63,17 @@ export interface IBtcClient {
    * Used for calculating confirmation count.
    */
   getBlockHeight(): Promise<number>;
+
+  /**
+   * Fetch verbose (decoded) transaction data for a batch of txids.
+   * Returns objects with vin/vout arrays for per-output transfer row construction.
+   */
+  getVerboseTxBatch(txids: string[]): Promise<Array<{
+    txid: string;
+    vin: Array<{ prevout?: { scriptpubkey_address?: string; value: number } }>;
+    vout: Array<{ scriptpubkey_address?: string; value: number }>;
+    fee?: number;
+    confirmations?: number;
+    blocktime?: number;
+  } | null>>;
 }

@@ -89,13 +89,38 @@ export interface DetailedTxInfo {
   counterparties: string[];
 }
 
+/**
+ * Per-output transfer row — matches production BtcTransfer semantics.
+ * One row per relevant output (not per transaction).
+ */
+export interface BtcTransferRow {
+  txid: string;
+  /** User's own address */
+  address: string;
+  /** Output index in the transaction */
+  vout: number;
+  /** Block height (0 if unconfirmed) */
+  height: number;
+  /** Satoshi amount of THIS output only */
+  value: number;
+  /** Direction: incoming or outgoing (change outputs are excluded) */
+  direction: 'incoming' | 'outgoing';
+  /** Receiving address for this output */
+  recipient?: string;
+  /** Fee for the entire transaction (same for all rows from one tx) */
+  fee?: number;
+}
+
 /** Query parameters for paginated transfer history */
 export interface TransferQuery {
-  /** Filter by direction: 'sent', 'received', or 'all' (default: 'all') */
-  direction?: 'sent' | 'received' | 'all';
-  /** Max number of results to return (default: 25) */
+  /** Filter by direction: 'incoming', 'outgoing', or 'all' (default: 'all').
+   * Also accepts legacy 'sent'/'received' for backward compatibility. */
+  direction?: 'incoming' | 'outgoing' | 'sent' | 'received' | 'all';
+  /** Max number of transfer rows to return (default: 25) */
   limit?: number;
-  /** Cursor for pagination — txid of the last seen tx (mempool.space chain pagination) */
+  /** Number of transactions to skip before processing (default: 0) */
+  skip?: number;
+  /** Cursor for pagination — txid of the last seen tx */
   afterTxId?: string;
   /** Numeric page number (blockbook pagination) */
   page?: number;
@@ -103,7 +128,7 @@ export interface TransferQuery {
 
 /** Paginated transfer result */
 export interface TransferResult {
-  transfers: DetailedTxInfo[];
+  transfers: BtcTransferRow[];
   /** True if there may be more results beyond this page */
   hasMore: boolean;
   /** Cursor for fetching the next page (last txid in this batch) */

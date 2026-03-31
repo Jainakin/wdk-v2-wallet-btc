@@ -279,6 +279,23 @@ export class ElectrumWsClient implements IBtcClient {
     };
   }
 
+  async getVerboseTxBatch(txids: string[]): Promise<Array<{
+    txid: string;
+    vin: Array<{ prevout?: { scriptpubkey_address?: string; value: number } }>;
+    vout: Array<{ scriptpubkey_address?: string; value: number }>;
+    fee?: number;
+    confirmations?: number;
+    blocktime?: number;
+  } | null>> {
+    if (txids.length === 0) return [];
+    const batchCalls = txids.map(id => ({
+      method: 'blockchain.transaction.get',
+      params: [id, true], // verbose=true
+    }));
+    const results = await this.transport.batch(batchCalls);
+    return results as any[];
+  }
+
   async getBlockHeight(): Promise<number> {
     try {
       // Electrum: blockchain.headers.subscribe returns current tip

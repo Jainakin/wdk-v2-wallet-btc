@@ -12,7 +12,7 @@ import { WalletAccountReadOnly } from '@aspect/wdk-v2-core';
 import type { TxRecord } from '@aspect/wdk-v2-utils';
 import type { IBtcClient } from './client/btc-client.js';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
-import type { UTXO, TransferQuery, TransferResult, DetailedTxInfo, BtcNetwork } from './types.js';
+import type { UTXO, TransferQuery, TransferResult, BtcTransferRow, BtcNetwork } from './types.js';
 import { selectUtxos, calculateMaxSpendable, addressTypeParams } from './utxo.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { convertBits } from './address.js';
@@ -178,35 +178,88 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
 
   async getTransfers(query?: Record<string, unknown>): Promise<TransferResult> {
     const q = query as TransferQuery | undefined;
-    const limit = q?.limit ?? 25;
-    const detailed = await this.client.getDetailedHistory(
-      this.address, limit, q?.afterTxId, q?.page,
-    );
+    const rowLimit = q?.limit ?? 25;
+    const skip = q?.skip ?? 0;
 
-    let filtered = detailed;
-    if (q?.direction && q.direction !== 'all') {
-      filtered = detailed.filter((tx) => tx.direction === q.direction);
-    }
+    // Normalize direction filter (accept legacy 'sent'/'received' too)
+    let dirFilter: 'incoming' | 'outgoing' | 'all' = 'all';
+    if (q?.direction === 'outgoing' || q?.direction === 'sent') dirFilter = 'outgoing';
+    else if (q?.direction === 'incoming' || q?.direction === 'received') dirFilter = 'incoming';
 
-    // Expand multi-counterparty txs to individual transfer rows
-    const transfers: DetailedTxInfo[] = [];
-    for (const tx of filtered) {
-      const uniqueCounterparties = [...new Set(tx.counterparties)];
-      if (uniqueCounterparties.length <= 1) {
-        transfers.push({ ...tx, counterparties: uniqueCounterparties });
-      } else {
-        for (const cp of uniqueCounterparties) {
-          transfers.push({ ...tx, counterparties: [cp] });
+    // Fetch enough transactions to fill the row limit.
+    // Each tx can produce multiple rows, so we may need fewer txs than limit.
+    const history = await this.client.getHistory(this.address);
+    const txEntries = history.slice(skip);
+
+    const transfers: BtcTransferRow[] = [];
+    let lastTxid: string | undefined;
+
+    // Process transactions in batches to avoid huge single requests
+    const BATCH = 10;
+    for (let i = 0; i < txEntries.length && transfers.length < rowLimit; i += BATCH) {
+      const batch = txEntries.slice(i, i + BATCH);
+      const details = await this.client.getVerboseTxBatch(
+        batch.map(h => h.tx_hash),
+      );
+
+      for (let j = 0; j < details.length && transfers.length < rowLimit; j++) {
+        const tx = details[j];
+        if (!tx) continue;
+        const entry = batch[j];
+        const height = entry.height > 0 ? entry.height : 0;
+
+        // Determine if this is an outgoing tx (any input belongs to us)
+        const isOutgoing = tx.vin.some(
+          (v: any) => v.prevout?.scriptpubkey_address === this.address,
+        );
+
+        // Calculate fee (sum inputs - sum outputs)
+        let fee: number | undefined;
+        if (isOutgoing) {
+          const totalIn = tx.vin.reduce(
+            (s: number, v: any) => s + (v.prevout?.value ?? 0), 0,
+          );
+          const totalOut = tx.vout.reduce(
+            (s: number, v: any) => s + (v.value ?? 0), 0,
+          );
+          fee = totalIn - totalOut;
         }
+
+        // One row per relevant output
+        for (let vout = 0; vout < tx.vout.length && transfers.length < rowLimit; vout++) {
+          const output = tx.vout[vout];
+          const outAddr = output.scriptpubkey_address;
+          const isMine = outAddr === this.address;
+
+          let direction: 'incoming' | 'outgoing' | null = null;
+          if (!isOutgoing && isMine) direction = 'incoming';
+          else if (isOutgoing && !isMine) direction = 'outgoing';
+          // isOutgoing && isMine = change → skip
+
+          if (!direction) continue;
+          if (dirFilter !== 'all' && dirFilter !== direction) continue;
+
+          transfers.push({
+            txid: tx.txid,
+            address: this.address,
+            vout,
+            height,
+            value: output.value ?? 0,
+            direction,
+            recipient: outAddr,
+            fee,
+          });
+        }
+
+        lastTxid = tx.txid;
       }
     }
 
-    const hasMore = detailed.length >= limit;
-    const nextCursor = detailed.length > 0
-      ? detailed[detailed.length - 1].txHash
-      : undefined;
-
-    return { transfers, hasMore, nextCursor };
+    return {
+      transfers,
+      hasMore: transfers.length >= rowLimit,
+      nextCursor: lastTxid,
+    };
   }
 
   // ── Receipt ────────────────────────────────────────────────────────────

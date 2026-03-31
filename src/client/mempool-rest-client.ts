@@ -273,6 +273,17 @@ export class MempoolRestClient implements IBtcClient {
     return parseInt(text, 10) || 0;
   }
 
+  async getVerboseTxBatch(txids: string[]): Promise<Array<any>> {
+    // Mempool.space REST: fetch each tx individually (no batch endpoint)
+    return Promise.all(txids.map(async (id) => {
+      try {
+        return await this.fetchJson(`/tx/${id}`);
+      } catch {
+        return null;
+      }
+    }));
+  }
+
   // ── Private helpers ──────────────────────────────────────────────────────
 
   private async fetchJson<T>(path: string): Promise<T> {

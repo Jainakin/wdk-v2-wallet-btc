@@ -13,7 +13,7 @@ import { WalletAccount } from '@aspect/wdk-v2-core';
 import type { KeyHandle, TxRecord } from '@aspect/wdk-v2-utils';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
 import { BtcAccountReadOnly } from './btc-account-read-only.js';
-import type { UTXO, TransferResult, DetailedTxInfo, TransferQuery, BtcNetwork } from './types.js';
+import type { UTXO, BtcNetwork } from './types.js';
 import { selectUtxos, calculateMaxSpendable, addressTypeParams } from './utxo.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
@@ -153,31 +153,7 @@ export class BtcAccount extends WalletAccount {
     }));
   }
 
-  async getTransfers(query?: Record<string, unknown>): Promise<TransferResult> {
-    const q = query as TransferQuery | undefined;
-    const limit = q?.limit ?? 25;
-    const detailed = await this.client.getDetailedHistory(
-      this.address, limit, q?.afterTxId, q?.page,
-    );
-    let filtered = detailed;
-    if (q?.direction && q.direction !== 'all') {
-      filtered = detailed.filter((tx) => tx.direction === q.direction);
-    }
-    const transfers: DetailedTxInfo[] = [];
-    for (const tx of filtered) {
-      const uniqueCounterparties = [...new Set(tx.counterparties)];
-      if (uniqueCounterparties.length <= 1) {
-        transfers.push({ ...tx, counterparties: uniqueCounterparties });
-      } else {
-        for (const cp of uniqueCounterparties) {
-          transfers.push({ ...tx, counterparties: [cp] });
-        }
-      }
-    }
-    const hasMore = detailed.length >= limit;
-    const nextCursor = detailed.length > 0 ? detailed[detailed.length - 1].txHash : undefined;
-    return { transfers, hasMore, nextCursor };
-  }
+  // getTransfers() is inherited from BtcAccountReadOnly — production per-output semantics
 
   async getTransactionReceipt(txHash: string): Promise<{
     txHash: string; confirmed: boolean; confirmations: number;

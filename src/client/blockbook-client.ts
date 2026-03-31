@@ -188,6 +188,17 @@ export class BlockbookClient implements IBtcClient {
     return data.blockbook?.bestHeight ?? 0;
   }
 
+  async getVerboseTxBatch(txids: string[]): Promise<Array<any>> {
+    // Blockbook: fetch each tx individually via /api/v2/tx/{txid}
+    return Promise.all(txids.map(async (id) => {
+      try {
+        return await this.fetchJson(`/api/v2/tx/${id}`);
+      } catch {
+        return null;
+      }
+    }));
+  }
+
   async getDetailedHistory(
     address: string,
     limit: number = 25,
