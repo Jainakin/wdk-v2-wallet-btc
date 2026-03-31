@@ -13,7 +13,7 @@ import type { TxRecord } from '@aspect/wdk-v2-utils';
 import type { IBtcClient } from './client/btc-client.js';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
 import type { UTXO, TransferQuery, TransferResult, BtcTransferRow, BtcNetwork } from './types.js';
-import { selectUtxos, calculateMaxSpendable, addressTypeParams } from './utxo.js';
+import { planSpend, planMaxSpendable } from './spend-planner.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { convertBits } from './address.js';
 import { bitcoinMessageHash, btcPerKbToSatVb, base64ToUint8Array } from './btc-helpers.js';
@@ -104,30 +104,24 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
       const btcPerKb = await this.client.estimateFee(3);
       const feeRate = btcPerKbToSatVb(btcPerKb);
 
-      const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
-      const selection = selectUtxos(utxos, targetSats, feeRate, dustThreshold, params.to, inputVbytes);
-      if (!selection) {
-        return {
-          feasible: false, fee: 0, feeRate, inputCount: 0,
-          outputCount: 0, totalInput: utxos.reduce((s, u) => s + u.value, 0), change: 0, changeValue: 0,
-          error: 'Insufficient funds',
-        };
-      }
+      const plan = planSpend(utxos, this.address, params.to, targetSats, feeRate);
 
       return {
         feasible: true,
-        fee: selection.fee,
+        fee: plan.fee,
         feeRate,
-        inputCount: selection.selected.length,
-        outputCount: selection.change > 0 ? 2 : 1,
-        totalInput: selection.selected.reduce((s, u) => s + u.value, 0),
-        change: selection.change,
-        changeValue: selection.change,
+        inputCount: plan.utxos.length,
+        outputCount: plan.changeValue > 0 ? 2 : 1,
+        totalInput: plan.utxos.reduce((s, u) => s + u.value, 0),
+        change: plan.changeValue,
+        changeValue: plan.changeValue,
       };
     } catch (e: any) {
+      const utxos = await this.fetchUtxos().catch(() => []);
+      const btcPerKb = await this.client.estimateFee(3).catch(() => 0);
       return {
-        feasible: false, fee: 0, feeRate: 0, inputCount: 0,
-        outputCount: 0, totalInput: 0, change: 0, changeValue: 0,
+        feasible: false, fee: 0, feeRate: btcPerKbToSatVb(btcPerKb), inputCount: 0,
+        outputCount: 0, totalInput: utxos.reduce((s: number, u: any) => s + u.value, 0), change: 0, changeValue: 0,
         error: e.message ?? String(e),
       };
     }
@@ -144,15 +138,13 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
     const btcPerKb = await this.client.estimateFee(3);
     const feeRate = btcPerKbToSatVb(btcPerKb);
 
-    const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
-    const maxSpendable = calculateMaxSpendable(utxos, feeRate, dustThreshold, inputVbytes);
-    const totalInput = utxos.reduce((s, u) => s + u.value, 0);
+    const result = planMaxSpendable(utxos, this.address, feeRate);
 
     return {
-      maxSpendable,
-      amount: maxSpendable,
-      fee: totalInput - maxSpendable,
-      changeValue: 0,
+      maxSpendable: result.amount,
+      amount: result.amount,
+      fee: result.fee,
+      changeValue: result.changeValue,
       utxoCount: utxos.length,
     };
   }
@@ -161,18 +153,18 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
 
   async getTransactionHistory(limit: number = 25): Promise<TxRecord[]> {
     const result = await this.getTransfers({ limit });
-    return (result as TransferResult).transfers.map((tx: DetailedTxInfo) => ({
-      txHash: tx.txHash,
+    return result.transfers.map((tx) => ({
+      txHash: tx.txid,
       chain: 'btc' as const,
-      from: tx.direction === 'received' ? (tx.counterparties[0] ?? '') : this.address,
-      to: tx.direction === 'sent' ? (tx.counterparties[0] ?? '') : this.address,
-      amount: String(Math.abs(tx.amount)),
-      fee: String(tx.fee),
-      direction: tx.direction,
-      counterparties: tx.counterparties,
-      timestamp: tx.timestamp,
-      status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
-      blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
+      from: tx.direction === 'incoming' ? (tx.recipient ?? '') : this.address,
+      to: tx.direction === 'outgoing' ? (tx.recipient ?? '') : this.address,
+      amount: String(tx.value),
+      fee: String(tx.fee ?? 0),
+      direction: tx.direction === 'incoming' ? 'received' as const : 'sent' as const,
+      counterparties: tx.recipient ? [tx.recipient] : [],
+      timestamp: 0,
+      status: tx.height > 0 ? ('confirmed' as const) : ('pending' as const),
+      blockNumber: tx.height > 0 ? tx.height : undefined,
     }));
   }
 

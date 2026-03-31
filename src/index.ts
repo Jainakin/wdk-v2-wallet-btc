@@ -5,6 +5,7 @@ export { BtcAccountReadOnly } from './btc-account-read-only.js';
 export * from './types.js';
 export { generateSegwitAddress, deriveAddress } from './address.js';
 export { selectUtxos } from './utxo.js';
+export { planSpend, planMaxSpendable, dustLimitForAddress, inputVbytesForAddress } from './spend-planner.js';
 export { buildTransaction, addressToScriptPubKey } from './transaction.js';
 export { buildAndSignPsbt, createPsbt, signInput, finalizeInput, extractTransaction, serializePsbt } from './psbt.js';
 export { estimateTxVbytes, calculateFee } from './fees.js';

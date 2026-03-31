@@ -14,7 +14,7 @@ import type { KeyHandle, TxRecord } from '@aspect/wdk-v2-utils';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
 import { BtcAccountReadOnly } from './btc-account-read-only.js';
 import type { UTXO, BtcNetwork } from './types.js';
-import { selectUtxos, calculateMaxSpendable, addressTypeParams } from './utxo.js';
+import { planSpend, planMaxSpendable, dustLimitForAddress } from './spend-planner.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
 import { convertBits } from './address.js';
@@ -95,21 +95,15 @@ export class BtcAccount extends WalletAccount {
       const utxos = await this.fetchUtxos();
       const btcPerKb = await this.client.estimateFee(3);
       const feeRate = btcPerKbToSatVb(btcPerKb);
-      const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
-      const selection = selectUtxos(utxos, targetSats, feeRate, dustThreshold, params.to, inputVbytes);
-      if (!selection) {
-        return {
-          feasible: false, fee: 0, feeRate, inputCount: 0,
-          outputCount: 0, totalInput: utxos.reduce((s, u) => s + u.value, 0),
-          change: 0, changeValue: 0, error: 'Insufficient funds',
-        };
-      }
+
+      const plan = planSpend(utxos, this.address, params.to, targetSats, feeRate);
+
       return {
-        feasible: true, fee: selection.fee, feeRate,
-        inputCount: selection.selected.length,
-        outputCount: selection.change > 0 ? 2 : 1,
-        totalInput: selection.selected.reduce((s, u) => s + u.value, 0),
-        change: selection.change, changeValue: selection.change,
+        feasible: true, fee: plan.fee, feeRate,
+        inputCount: plan.utxos.length,
+        outputCount: plan.changeValue > 0 ? 2 : 1,
+        totalInput: plan.utxos.reduce((s, u) => s + u.value, 0),
+        change: plan.changeValue, changeValue: plan.changeValue,
       };
     } catch (e: any) {
       return {
@@ -127,29 +121,29 @@ export class BtcAccount extends WalletAccount {
     const utxos = await this.fetchUtxos();
     const btcPerKb = await this.client.estimateFee(3);
     const feeRate = btcPerKbToSatVb(btcPerKb);
-    const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
-    const maxSpendable = calculateMaxSpendable(utxos, feeRate, dustThreshold, inputVbytes);
-    const totalInput = utxos.reduce((s, u) => s + u.value, 0);
+
+    const result = planMaxSpendable(utxos, this.address, feeRate);
+
     return {
-      maxSpendable, amount: maxSpendable,
-      fee: totalInput - maxSpendable, changeValue: 0, utxoCount: utxos.length,
+      maxSpendable: result.amount, amount: result.amount,
+      fee: result.fee, changeValue: result.changeValue, utxoCount: utxos.length,
     };
   }
 
   async getTransactionHistory(limit: number = 25): Promise<TxRecord[]> {
     const result = await this.getTransfers({ limit });
-    return (result as TransferResult).transfers.map((tx: DetailedTxInfo) => ({
-      txHash: tx.txHash,
+    return result.transfers.map((tx) => ({
+      txHash: tx.txid,
       chain: 'btc' as const,
-      from: tx.direction === 'received' ? (tx.counterparties[0] ?? '') : this.address,
-      to: tx.direction === 'sent' ? (tx.counterparties[0] ?? '') : this.address,
-      amount: String(Math.abs(tx.amount)),
-      fee: String(tx.fee),
-      direction: tx.direction,
-      counterparties: tx.counterparties,
-      timestamp: tx.timestamp,
-      status: tx.confirmed ? ('confirmed' as const) : ('pending' as const),
-      blockNumber: tx.blockHeight > 0 ? tx.blockHeight : undefined,
+      from: tx.direction === 'incoming' ? (tx.recipient ?? '') : this.address,
+      to: tx.direction === 'outgoing' ? (tx.recipient ?? '') : this.address,
+      amount: String(tx.value),
+      fee: String(tx.fee ?? 0),
+      direction: tx.direction === 'incoming' ? 'received' as const : 'sent' as const,
+      counterparties: tx.recipient ? [tx.recipient] : [],
+      timestamp: 0,
+      status: tx.height > 0 ? ('confirmed' as const) : ('pending' as const),
+      blockNumber: tx.height > 0 ? tx.height : undefined,
     }));
   }
 
@@ -240,17 +234,16 @@ export class BtcAccount extends WalletAccount {
       feeRate = btcPerKbToSatVb(btcPerKb);
     }
 
-    // 3. Coin selection (BIP-aware dust + input sizing)
-    const { inputVbytes: sendInputVbytes, dustThreshold: sendDust } = addressTypeParams(this.address);
-    const selection = selectUtxos(utxos, targetSats, feeRate, sendDust, params.to, sendInputVbytes);
-    if (!selection) throw new Error('Insufficient funds');
+    // 3. Spend planning (production-parity: planSpend mirrors _planSpend)
+    const plan = planSpend(utxos, this.address, params.to, targetSats, feeRate);
+    const sendDust = dustLimitForAddress(this.address);
 
     // 4. For legacy inputs, fetch full previous tx (nonWitnessUtxo)
     const spkBytes = native.encoding.hexDecode(utxos[0].scriptPubKey);
     const isLegacy = spkBytes.length === 25 && spkBytes[0] === 0x76;
 
     const inputs = await Promise.all(
-      selection.selected.map(async (u) => {
+      plan.utxos.map(async (u) => {
         const input: any = {
           txid: u.txid, vout: u.vout, value: u.value,
           scriptPubKey: u.scriptPubKey, address: this.address,
@@ -266,8 +259,8 @@ export class BtcAccount extends WalletAccount {
     const outputs: { address: string; value: number }[] = [
       { address: params.to, value: targetSats },
     ];
-    if (selection.change > 0) {
-      outputs.push({ address: this.address, value: selection.change });
+    if (plan.changeValue > 0) {
+      outputs.push({ address: this.address, value: plan.changeValue });
     }
 
     // 6. Sign with PSBT
@@ -281,34 +274,30 @@ export class BtcAccount extends WalletAccount {
     }));
 
     let signed = buildAndSignPsbt(psbtInputs, psbtOutputs, keyHandles);
-    let currentFee = selection.fee;
+    let currentFee = plan.fee;
 
     // 7. Post-sign fee rebalance (matches production _getRawTransaction)
-    // After signing, check actual tx vsize against fee. If short, adjust
-    // outputs and rebuild+resign exactly once.
     const rawBytes = native.encoding.hexDecode(signed.rawTx);
-    const actualVsize = rawBytes.length; // serialized tx bytes = vsize for segwit
+    const actualVsize = rawBytes.length;
     const requiredFee = Math.ceil(actualVsize * feeRate);
 
     if (requiredFee > currentFee) {
       const delta = requiredFee - currentFee;
       currentFee = requiredFee;
 
-      // Priority: reduce change first, then recipient amount
-      let currentChange = selection.change;
+      let currentChange = plan.changeValue;
       let currentTarget = targetSats;
 
       if (currentChange > 0) {
         currentChange -= delta;
-        if (currentChange < sendDust) currentChange = 0;
+        if (currentChange <= sendDust) currentChange = 0;
       } else {
         currentTarget -= delta;
-        if (currentTarget < sendDust) {
-          throw new Error('Insufficient funds: fee rebalance would make output below dust');
+        if (currentTarget <= sendDust) {
+          throw new Error(`The amount after fees must be bigger than the dust limit (= ${sendDust}).`);
         }
       }
 
-      // Rebuild outputs and resign
       const rebalancedOutputs: { address: string; value: number }[] = [
         { address: params.to, value: currentTarget },
       ];
@@ -321,12 +310,11 @@ export class BtcAccount extends WalletAccount {
 
       signed = buildAndSignPsbt(psbtInputs, rebPsbtOutputs, keyHandles);
 
-      // Final validation — must not still be short
       const rebBytes = native.encoding.hexDecode(signed.rawTx);
       const rebVsize = rebBytes.length;
       const rebRequired = Math.ceil(rebVsize * feeRate);
       if (rebRequired > currentFee) {
-        throw new Error('Fee shortfall persists after output rebalance');
+        throw new Error('Fee shortfall after output rebalance.');
       }
     }
 
