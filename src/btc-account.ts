@@ -331,8 +331,13 @@ export class BtcAccount extends WalletAccount {
     const recoverableSig = native.crypto.signRecoverableSecp256k1(this.keyHandle, msgHash);
     const recid = recoverableSig[64];
 
-    // Flag byte: 27 + recid + 4 (compressed)
-    const flagByte = 27 + recid + 4;
+    // Recovery flag byte per BIP-137 / bitcoinjs-message:
+    //   P2PKH compressed: 31 + recid  (27 + recid + 4)
+    //   P2WPKH:           39 + recid  (27 + recid + 4 + 8)
+    const isSegwit = this.address.startsWith('bc1q') ||
+                     this.address.startsWith('tb1q') ||
+                     this.address.startsWith('bcrt1q');
+    const flagByte = 27 + recid + 4 + (isSegwit ? 8 : 0);
     const result = new Uint8Array(65);
     result[0] = flagByte;
     result.set(recoverableSig.slice(0, 64), 1);
