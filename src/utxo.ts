@@ -14,7 +14,9 @@ import type { UTXO } from './types.js';
 // ── Constants matching production ────────────────────────────────────────────
 
 /** Estimated vbytes per P2WPKH input (witness-discounted) */
-const VBYTES_PER_INPUT = 68;
+export const VBYTES_PER_P2WPKH_INPUT = 68;
+/** Estimated vbytes per P2PKH input (legacy, no witness) */
+export const VBYTES_PER_P2PKH_INPUT = 148;
 /** Default estimated vbytes per output (P2WPKH — our change output) */
 const VBYTES_PER_OUTPUT_DEFAULT = 31;
 /** Fixed transaction overhead in vbytes (version + locktime + segwit marker) */
@@ -37,6 +39,22 @@ function estimateOutputVbytes(address?: string): number {
 export const DUST_THRESHOLD_P2PKH = 546;
 /** Dust threshold for P2WPKH outputs (BIP84 native segwit) — 294 sats */
 export const DUST_THRESHOLD_P2WPKH = 294;
+
+/**
+ * Determine input vbytes and dust threshold based on the sender's address type.
+ * Matches production BIP_BY_ADDRESS_PREFIX logic.
+ */
+export function addressTypeParams(address: string): { inputVbytes: number; dustThreshold: number } {
+  if (
+    address.startsWith('bc1q') ||
+    address.startsWith('tb1q') ||
+    address.startsWith('bcrt1q')
+  ) {
+    return { inputVbytes: VBYTES_PER_P2WPKH_INPUT, dustThreshold: DUST_THRESHOLD_P2WPKH };
+  }
+  // P2PKH (legacy) — starts with 1, m, n
+  return { inputVbytes: VBYTES_PER_P2PKH_INPUT, dustThreshold: DUST_THRESHOLD_P2PKH };
+}
 
 /**
  * Minimum transaction fee in satoshis.
@@ -78,6 +96,7 @@ export function selectUtxos(
   feeRate: number,
   dustThreshold: number = DUST_THRESHOLD_P2WPKH,
   destinationAddr?: string,
+  inputVbytes: number = VBYTES_PER_P2WPKH_INPUT,
 ): CoinSelection | null {
   const sorted = [...utxos].sort((a, b) => b.value - a.value);
   const candidates = sorted.slice(0, MAX_UTXO_INPUTS);
@@ -87,11 +106,11 @@ export function selectUtxos(
 
   // Phase 1: avoidChange
   const changeCost = Math.ceil(changeOutputVbytes * feeRate);
-  const avoidResult = avoidChange(candidates, targetAmount, feeRate, destOutputVbytes, changeCost);
+  const avoidResult = avoidChange(candidates, targetAmount, feeRate, destOutputVbytes, changeCost, inputVbytes);
   if (avoidResult) return avoidResult;
 
   // Phase 2: addUntilReach
-  return addUntilReach(candidates, targetAmount, feeRate, dustThreshold, destOutputVbytes, changeOutputVbytes);
+  return addUntilReach(candidates, targetAmount, feeRate, dustThreshold, destOutputVbytes, changeOutputVbytes, inputVbytes);
 }
 
 /**
@@ -105,6 +124,7 @@ function avoidChange(
   feeRate: number,
   destOutputVbytes: number,
   changeCost: number,
+  inputVbytes: number,
 ): CoinSelection | null {
   const selected: UTXO[] = [];
   let totalInput = 0;
@@ -113,7 +133,7 @@ function avoidChange(
     selected.push(utxo);
     totalInput += utxo.value;
 
-    const vbytes = TX_OVERHEAD_VBYTES + selected.length * VBYTES_PER_INPUT + destOutputVbytes;
+    const vbytes = TX_OVERHEAD_VBYTES + selected.length * inputVbytes + destOutputVbytes;
     let fee = Math.ceil(vbytes * feeRate);
     if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;
 
@@ -137,6 +157,7 @@ function addUntilReach(
   dustThreshold: number,
   destOutputVbytes: number,
   changeOutputVbytes: number,
+  inputVbytes: number,
 ): CoinSelection | null {
   const selected: UTXO[] = [];
   let totalInput = 0;
@@ -145,7 +166,7 @@ function addUntilReach(
     selected.push(utxo);
     totalInput += utxo.value;
 
-    const vbytes = TX_OVERHEAD_VBYTES + selected.length * VBYTES_PER_INPUT + destOutputVbytes + changeOutputVbytes;
+    const vbytes = TX_OVERHEAD_VBYTES + selected.length * inputVbytes + destOutputVbytes + changeOutputVbytes;
     let fee = Math.ceil(vbytes * feeRate);
     if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;
 
@@ -165,8 +186,8 @@ function addUntilReach(
 /**
  * Estimate the virtual size (vbytes) of a transaction.
  */
-export function estimateVbytes(numInputs: number, numOutputs: number): number {
-  return TX_OVERHEAD_VBYTES + numInputs * VBYTES_PER_INPUT + numOutputs * VBYTES_PER_OUTPUT_DEFAULT;
+export function estimateVbytes(numInputs: number, numOutputs: number, inputVbytes: number = VBYTES_PER_P2WPKH_INPUT): number {
+  return TX_OVERHEAD_VBYTES + numInputs * inputVbytes + numOutputs * VBYTES_PER_OUTPUT_DEFAULT;
 }
 
 /**
@@ -176,11 +197,12 @@ export function calculateMaxSpendable(
   utxos: UTXO[],
   feeRate: number,
   dustThreshold: number = DUST_THRESHOLD_P2WPKH,
+  inputVbytes: number = VBYTES_PER_P2WPKH_INPUT,
 ): number {
   const sorted = [...utxos].sort((a, b) => b.value - a.value);
   const candidates = sorted.slice(0, MAX_UTXO_INPUTS);
   const totalInput = candidates.reduce((sum, u) => sum + u.value, 0);
-  const vbytes = TX_OVERHEAD_VBYTES + candidates.length * VBYTES_PER_INPUT + 1 * VBYTES_PER_OUTPUT_DEFAULT;
+  const vbytes = TX_OVERHEAD_VBYTES + candidates.length * inputVbytes + 1 * VBYTES_PER_OUTPUT_DEFAULT;
   let fee = Math.ceil(vbytes * feeRate);
   if (fee < MIN_TX_FEE_SATS) fee = MIN_TX_FEE_SATS;
   const maxSpendable = totalInput - fee;

@@ -13,7 +13,7 @@ import type { TxRecord } from '@aspect/wdk-v2-utils';
 import type { IBtcClient } from './client/btc-client.js';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
 import type { UTXO, TransferQuery, TransferResult, DetailedTxInfo, BtcNetwork } from './types.js';
-import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH } from './utxo.js';
+import { selectUtxos, calculateMaxSpendable, addressTypeParams } from './utxo.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { convertBits } from './address.js';
 import { bitcoinMessageHash, btcPerKbToSatVb, base64ToUint8Array } from './btc-helpers.js';
@@ -104,7 +104,8 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
       const btcPerKb = await this.client.estimateFee(3);
       const feeRate = btcPerKbToSatVb(btcPerKb);
 
-      const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH, params.to);
+      const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
+      const selection = selectUtxos(utxos, targetSats, feeRate, dustThreshold, params.to, inputVbytes);
       if (!selection) {
         return {
           feasible: false, fee: 0, feeRate, inputCount: 0,
@@ -143,7 +144,8 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
     const btcPerKb = await this.client.estimateFee(3);
     const feeRate = btcPerKbToSatVb(btcPerKb);
 
-    const maxSpendable = calculateMaxSpendable(utxos, feeRate, DUST_THRESHOLD_P2WPKH);
+    const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
+    const maxSpendable = calculateMaxSpendable(utxos, feeRate, dustThreshold, inputVbytes);
     const totalInput = utxos.reduce((s, u) => s + u.value, 0);
 
     return {

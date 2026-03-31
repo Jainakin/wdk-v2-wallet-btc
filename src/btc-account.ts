@@ -14,7 +14,7 @@ import type { KeyHandle, TxRecord } from '@aspect/wdk-v2-utils';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
 import { BtcAccountReadOnly } from './btc-account-read-only.js';
 import type { UTXO, TransferResult, DetailedTxInfo, TransferQuery, BtcNetwork } from './types.js';
-import { selectUtxos, calculateMaxSpendable, DUST_THRESHOLD_P2WPKH } from './utxo.js';
+import { selectUtxos, calculateMaxSpendable, addressTypeParams } from './utxo.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
 import { convertBits } from './address.js';
@@ -95,7 +95,8 @@ export class BtcAccount extends WalletAccount {
       const utxos = await this.fetchUtxos();
       const btcPerKb = await this.client.estimateFee(3);
       const feeRate = btcPerKbToSatVb(btcPerKb);
-      const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH, params.to);
+      const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
+      const selection = selectUtxos(utxos, targetSats, feeRate, dustThreshold, params.to, inputVbytes);
       if (!selection) {
         return {
           feasible: false, fee: 0, feeRate, inputCount: 0,
@@ -126,7 +127,8 @@ export class BtcAccount extends WalletAccount {
     const utxos = await this.fetchUtxos();
     const btcPerKb = await this.client.estimateFee(3);
     const feeRate = btcPerKbToSatVb(btcPerKb);
-    const maxSpendable = calculateMaxSpendable(utxos, feeRate, DUST_THRESHOLD_P2WPKH);
+    const { inputVbytes, dustThreshold } = addressTypeParams(this.address);
+    const maxSpendable = calculateMaxSpendable(utxos, feeRate, dustThreshold, inputVbytes);
     const totalInput = utxos.reduce((s, u) => s + u.value, 0);
     return {
       maxSpendable, amount: maxSpendable,
@@ -261,8 +263,9 @@ export class BtcAccount extends WalletAccount {
       feeRate = btcPerKbToSatVb(btcPerKb);
     }
 
-    // 3. Coin selection
-    const selection = selectUtxos(utxos, targetSats, feeRate, DUST_THRESHOLD_P2WPKH, params.to);
+    // 3. Coin selection (BIP-aware dust + input sizing)
+    const { inputVbytes: sendInputVbytes, dustThreshold: sendDust } = addressTypeParams(this.address);
+    const selection = selectUtxos(utxos, targetSats, feeRate, sendDust, params.to, sendInputVbytes);
     if (!selection) throw new Error('Insufficient funds');
 
     // 4. For legacy inputs, fetch full previous tx (nonWitnessUtxo)
