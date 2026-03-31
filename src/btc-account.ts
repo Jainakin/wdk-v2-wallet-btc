@@ -280,27 +280,60 @@ export class BtcAccount extends WalletAccount {
       address: out.address, value: out.value,
     }));
 
-    const { rawTx, txid } = buildAndSignPsbt(psbtInputs, psbtOutputs, keyHandles);
+    let signed = buildAndSignPsbt(psbtInputs, psbtOutputs, keyHandles);
+    let currentFee = selection.fee;
 
-    // 7. Post-sign fee validation (production parity: fee rebalance check)
-    // Verify that the actual signed tx fee covers feeRate * actual_vsize.
-    // For P2WPKH, pre-sign estimation is exact (fixed witness size).
-    // For mixed input types, this catches under-fee situations.
-    const rawBytes = native.encoding.hexDecode(rawTx);
-    const actualWeight = rawBytes.length * 4; // simplified: non-witness bytes count 4x
-    const actualVsize = Math.ceil(actualWeight / 4);
-    const minRequiredFee = Math.ceil(actualVsize * feeRate);
-    if (selection.fee < minRequiredFee) {
-      // Fee is insufficient for the actual tx size — this shouldn't happen
-      // for P2WPKH but guards against edge cases with other script types.
-      // In production, this triggers a re-plan. For now, warn but proceed
-      // since the fee is still above MIN_TX_FEE_SATS.
+    // 7. Post-sign fee rebalance (matches production _getRawTransaction)
+    // After signing, check actual tx vsize against fee. If short, adjust
+    // outputs and rebuild+resign exactly once.
+    const rawBytes = native.encoding.hexDecode(signed.rawTx);
+    const actualVsize = rawBytes.length; // serialized tx bytes = vsize for segwit
+    const requiredFee = Math.ceil(actualVsize * feeRate);
+
+    if (requiredFee > currentFee) {
+      const delta = requiredFee - currentFee;
+      currentFee = requiredFee;
+
+      // Priority: reduce change first, then recipient amount
+      let currentChange = selection.change;
+      let currentTarget = targetSats;
+
+      if (currentChange > 0) {
+        currentChange -= delta;
+        if (currentChange < sendDust) currentChange = 0;
+      } else {
+        currentTarget -= delta;
+        if (currentTarget < sendDust) {
+          throw new Error('Insufficient funds: fee rebalance would make output below dust');
+        }
+      }
+
+      // Rebuild outputs and resign
+      const rebalancedOutputs: { address: string; value: number }[] = [
+        { address: params.to, value: currentTarget },
+      ];
+      if (currentChange > 0) {
+        rebalancedOutputs.push({ address: this.address, value: currentChange });
+      }
+      const rebPsbtOutputs = rebalancedOutputs.map((out) => ({
+        address: out.address, value: out.value,
+      }));
+
+      signed = buildAndSignPsbt(psbtInputs, rebPsbtOutputs, keyHandles);
+
+      // Final validation — must not still be short
+      const rebBytes = native.encoding.hexDecode(signed.rawTx);
+      const rebVsize = rebBytes.length;
+      const rebRequired = Math.ceil(rebVsize * feeRate);
+      if (rebRequired > currentFee) {
+        throw new Error('Fee shortfall persists after output rebalance');
+      }
     }
 
     // 8. Broadcast
-    const broadcastTxid = await this.client.broadcast(rawTx);
+    const broadcastTxid = await this.client.broadcast(signed.rawTx);
 
-    return { txHash: broadcastTxid || txid, fee: selection.fee };
+    return { txHash: broadcastTxid || signed.txid, fee: currentFee };
   }
 
   async sign(message: string): Promise<string> {
