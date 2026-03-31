@@ -9,6 +9,7 @@ export { planSpend, planMaxSpendable, dustLimitForAddress, inputVbytesForAddress
 export { buildTransaction, addressToScriptPubKey } from './transaction.js';
 export { buildAndSignPsbt, createPsbt, signInput, finalizeInput, extractTransaction, serializePsbt } from './psbt.js';
 export { estimateTxVbytes, calculateFee } from './fees.js';
+export { calculateVsize } from './tx-weight.js';
 
 // Client interface and implementations (matching production WDK pattern)
 export type { IBtcClient } from './client/btc-client.js';

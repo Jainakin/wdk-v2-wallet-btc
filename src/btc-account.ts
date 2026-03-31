@@ -13,8 +13,9 @@ import { WalletAccount } from '@aspect/wdk-v2-core';
 import type { KeyHandle, TxRecord } from '@aspect/wdk-v2-utils';
 import type { BtcWalletManager } from './btc-wallet-manager.js';
 import { BtcAccountReadOnly } from './btc-account-read-only.js';
-import type { UTXO, BtcNetwork } from './types.js';
+import type { UTXO, BtcNetwork, TransferQuery, TransferResult, BtcTransferRow } from './types.js';
 import { planSpend, planMaxSpendable, dustLimitForAddress } from './spend-planner.js';
+import { calculateVsize } from './tx-weight.js';
 import { addressToScriptPubKey } from './transaction.js';
 import { buildAndSignPsbt } from './psbt.js';
 import { convertBits } from './address.js';
@@ -147,7 +148,11 @@ export class BtcAccount extends WalletAccount {
     }));
   }
 
-  // getTransfers() is inherited from BtcAccountReadOnly — production per-output semantics
+  async getTransfers(query?: Record<string, unknown>): Promise<TransferResult> {
+    // Delegate to read-only implementation (same per-output row semantics)
+    const ro = this.toReadOnly();
+    return ro.getTransfers(query);
+  }
 
   async getTransactionReceipt(txHash: string): Promise<{
     txHash: string; confirmed: boolean; confirmations: number;
@@ -277,8 +282,9 @@ export class BtcAccount extends WalletAccount {
     let currentFee = plan.fee;
 
     // 7. Post-sign fee rebalance (matches production _getRawTransaction)
+    // Exact vsize from raw bytes — same formula as bitcoinjs-lib tx.virtualSize()
     const rawBytes = native.encoding.hexDecode(signed.rawTx);
-    const actualVsize = rawBytes.length;
+    const actualVsize = calculateVsize(rawBytes);
     const requiredFee = Math.ceil(actualVsize * feeRate);
 
     if (requiredFee > currentFee) {
@@ -311,7 +317,7 @@ export class BtcAccount extends WalletAccount {
       signed = buildAndSignPsbt(psbtInputs, rebPsbtOutputs, keyHandles);
 
       const rebBytes = native.encoding.hexDecode(signed.rawTx);
-      const rebVsize = rebBytes.length;
+      const rebVsize = calculateVsize(rebBytes);
       const rebRequired = Math.ceil(rebVsize * feeRate);
       if (rebRequired > currentFee) {
         throw new Error('Fee shortfall after output rebalance.');
