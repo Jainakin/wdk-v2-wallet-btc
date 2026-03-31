@@ -161,13 +161,14 @@ export class BtcAccount extends WalletAccount {
   } | null> {
     try {
       const status = await this.client.getTxStatus(txHash);
+      // Production returns null for unconfirmed transactions
+      if (!status.confirmed || status.blockHeight <= 0) return null;
+
       let confirmations = 0;
-      if (status.confirmed && status.blockHeight > 0) {
-        try {
-          const tipHeight = await this.client.getBlockHeight();
-          confirmations = tipHeight > 0 ? tipHeight - status.blockHeight + 1 : 1;
-        } catch { confirmations = 1; }
-      }
+      try {
+        const tipHeight = await this.client.getBlockHeight();
+        confirmations = tipHeight > 0 ? tipHeight - status.blockHeight + 1 : 1;
+      } catch { confirmations = 1; }
       let rawTx: string | undefined;
       try { rawTx = await this.client.getTransaction(txHash); } catch { /* optional */ }
       return { ...status, confirmations, rawTx };
