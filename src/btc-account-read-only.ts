@@ -307,4 +307,14 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
       address: this.address,
     }));
   }
+
+  // ── Unsupported interface methods (match production surface) ────────────
+
+  async getTokenBalance(_tokenAddress: string): Promise<never> {
+    throw new Error("The 'getTokenBalance' method is not supported on the bitcoin blockchain.");
+  }
+
+  async quoteTransfer(_options: Record<string, unknown>): Promise<never> {
+    throw new Error("The 'quoteTransfer' method is not supported on the bitcoin blockchain.");
+  }
 }

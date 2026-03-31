@@ -337,6 +337,12 @@ export class BtcAccount extends WalletAccount {
     return uint8ArrayToBase64(result);
   }
 
+  // ── Unsupported interface methods (match production surface) ────────────
+
+  async transfer(_options: Record<string, unknown>): Promise<never> {
+    throw new Error("The 'transfer' method is not supported on the bitcoin blockchain.");
+  }
+
   // ── Downcast to read-only ──────────────────────────────────────────────
 
   toReadOnly(): BtcAccountReadOnly {
