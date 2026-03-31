@@ -48,8 +48,8 @@ export class BtcAccountReadOnly extends WalletAccountReadOnly {
 
   async getBalance(): Promise<string> {
     const balance = await this.client.getBalance(this.address);
-    // Return mempool-aware balance: confirmed + unconfirmed
-    return String(balance.confirmed + balance.unconfirmed);
+    // Production returns confirmed only — unconfirmed is not counted
+    return String(balance.confirmed);
   }
 
   // ── Fee rates ──────────────────────────────────────────────────────────
